@@ -86,35 +86,44 @@
               target="_blank">recording on Suno</a>)
           </div>
           <div class="postscript"
-            id="postscript-item--easter-joy-immanuel-is-his-name"> <button
-              type="button" id="select-2025-2026-btn"
-              name="select-2025-2026-btn"> Show 2025 version </button>
-            <script>
-              document.addEventListener('DOMContentLoaded', function() {
-                const spans25 = document.getElementsByClassName('25');
-                const spans26 = document.getElementsByClassName('26');
-                const btn = document.getElementById('select-2025-2026-btn');
-                let showing26 = true;
+            id="postscript-item--easter-joy-immanuel-is-his-name"><input
+              class="postscript-toggle-cb hidden"
+              id="postscript-item--easter-joy-immanuel-is-his-name--more"
+              type="checkbox" />
+            <div class="postscript-content" style="--preview-lines: 5"
+              data-preview-lines="5"> <button type="button"
+                id="select-2025-2026-btn" name="select-2025-2026-btn"> Show 2025
+                version </button>
+              <script>
+                document.addEventListener('DOMContentLoaded', function() {
+                  const spans25 = document.getElementsByClassName('25');
+                  const spans26 = document.getElementsByClassName('26');
+                  const btn = document.getElementById(
+                    'select-2025-2026-btn');
+                  let showing26 = true;
 
-                function applyVisibility() {
-                  const display25 = showing26 ? 'none' : '';
-                  const display26 = showing26 ? '' : 'none';
-                  Array.from(spans25).forEach(function(el) {
-                    el.style.display = display25;
-                  });
-                  Array.from(spans26).forEach(function(el) {
-                    el.style.display = display26;
-                  });
-                  btn.textContent = showing26 ? 'Show 2025 version.' :
-                    'Show 2026 version.';
-                }
-                applyVisibility();
-                btn.addEventListener('click', function() {
-                  showing26 = !showing26;
+                  function applyVisibility() {
+                    const display25 = showing26 ? 'none' : '';
+                    const display26 = showing26 ? '' : 'none';
+                    Array.from(spans25).forEach(function(el) {
+                      el.style.display = display25;
+                    });
+                    Array.from(spans26).forEach(function(el) {
+                      el.style.display = display26;
+                    });
+                    btn.textContent = showing26 ? 'Show 2025 version.' :
+                      'Show 2026 version.';
+                  }
                   applyVisibility();
+                  btn.addEventListener('click', function() {
+                    showing26 = !showing26;
+                    applyVisibility();
+                  });
                 });
-              });
-            </script>
+              </script>
+            </div><label class="postscript-toggle"
+              for="postscript-item--easter-joy-immanuel-is-his-name--more"><span
+                class="sr-only">See more</span></label>
           </div>
         </div>
       </div>
