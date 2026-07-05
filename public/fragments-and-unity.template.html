@@ -644,12 +644,24 @@ h1 {
   padding: 0;
 }
 
+.poem-labels li {
+  display: contents;
+}
+
 .poem-label {
   background: #eef1f4;
   border-radius: 999px;
   color: #57606a;
   font-size: 0.8em;
   padding: 3px 12px;
+  text-decoration: none;
+}
+
+.poem-label:hover,
+.poem-label:focus-visible,
+.poem-card-label:hover,
+.poem-card-label:focus-visible {
+  background: #e2e6ea;
 }
 
 h1.poem-title,
@@ -731,6 +743,7 @@ h2.poem-title {
   color: #57606a;
   font-size: 0.72em;
   padding: 2px 9px;
+  text-decoration: none;
 }
 
 .audio-indicator {
@@ -817,7 +830,7 @@ h2.poem-title {
   font: inherit;
   font-size: .9em;
   gap: 8px;
-  padding: 8px 14px;
+  padding: 3px 12px 4px;
   transition: opacity .15s ease, border-color .15s ease, box-shadow .15s ease;
 }
 
@@ -884,7 +897,7 @@ h2.poem-title {
   color: #007AFF;
   cursor: pointer;
   font: inherit;
-  padding: 8px 16px;
+  padding: 3px 14px 4px;
 }
 
 .filter-reset:hover {
@@ -1382,6 +1395,13 @@ html.dark-mode .poem-card-label {
   color: #9aa6b2;
 }
 
+html.dark-mode .poem-label:hover,
+html.dark-mode .poem-label:focus-visible,
+html.dark-mode .poem-card-label:hover,
+html.dark-mode .poem-card-label:focus-visible {
+  background: #26313b;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #22262b;
@@ -1539,6 +1559,13 @@ html.dark-mode .poem-card-label {
     background: #1b232b;
     color: var(--muted);
   }
+
+  .poem-label:hover,
+  .poem-label:focus-visible,
+  .poem-card-label:hover,
+  .poem-card-label:focus-visible {
+    background: #26313b;
+  }
 }
 
 /* User customisations — this file is not managed by sync-framework.sh. */
@@ -1556,6 +1583,8 @@ html.dark-mode .poem-card-label {
   text-align: center;
   width: 0.75em;
 }
+
+.poem-labels { display: none !important; }
 
 /* ~~ CUSTOM CSS END ~~ */
 
