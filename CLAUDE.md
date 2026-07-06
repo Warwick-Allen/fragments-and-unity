@@ -96,6 +96,18 @@ skip_paths=public/poetic.css
 Supported keys: `favicon`, `subtitle`, `skip_paths`, `auto_sync`, `sync_schedule`.
 See `docs/BUILD.md` for full details.
 
+## Tech debt
+
+When you defer work, take a shortcut, or notice a known gap, record it in `TECH-DEBT.md`
+at the repo root — do not leave it only in a commit message or in chat. Keep entries short
+and dated, and delete one when it is resolved.
+
+Route it to the right repo: if the deferred work is in the `poetic` framework (anything
+under the synced `src/tools/`, `src/templates/`, `scripts/`, `editors/`, or `docs/`), log
+it in the **framework** repo's `TECH-DEBT.md` instead — not here. This repo's `TECH-DEBT.md`
+is for consumer-specific debt (poems, `.shared.poem`, `public/custom.css`, `.poetic-config`,
+CI, deployment).
+
 ## Key docs
 
 | File | Contents |
