@@ -18,10 +18,10 @@ Control them?
 {{ Song arrangement, "Jailor Pen", with added lines (2025) }}
 
 {Verse 1}
-The chatter hums, a restless din,
-Thoughts collide and pull me in,
-But there you wait, my stern blue guard,
-To lock them up, to stand unmarred.
+/.ai{The chatter hums, a restless din,}
+/.ai{Thoughts collide and pull me in,}
+/.ai{But there you wait, my stern blue guard,}
+/.ai{To lock them up, to stand unmarred.}
 
 {Chorus}
 Jailor pen, quell the riot,
@@ -41,8 +41,8 @@ Can you
 Control them?
 
 {Bridge}
-Each stroke a cell, each line a gate,
-You trap the clutter, shift the weight,
+/.ai{Each stroke a cell, each line a gate,}
+/.ai{You trap the clutter, shift the weight,}
 A paradox in ink I see---
 You cage my mind to set me free.
 
@@ -53,9 +53,9 @@ Jailor pen, be my friend,
 Accentuate the quiet.
 
 {Verse 3}
-The wild ones twist, they tug, they fray,
-A storm of threads that won't obey,
-But you, my ward, you bind them still,
+/.ai{The wild ones twist, they tug, they fray,}
+/.ai{A storm of threads that won't obey,}
+/.ai{But you, my ward, you bind them still,}
 Expel the mess, my soul to fill.
 
 {Outro}
@@ -68,9 +68,14 @@ In your chains, my wings are found.
 
 Audiomack
 Suno: song/c85fc871-3d23-4b26-b219-1605b6b802a6
+
 ====
+
+${disclaimer}
+
 ====
 ====
 
 #creativity
 #restlessness
+#ai-coauthored
