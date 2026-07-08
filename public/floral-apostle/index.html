@@ -69,16 +69,19 @@
             </li>
           </ul>
           <div class="song-link" id="song--floral-apostle">
-            <div class="audiomack-container"
-              id="audiomack-container--floral-apostle"><button
-                class="load-audiomack-btn" id="load-audiomack--floral-apostle"
-                type="button" data-slug="floral-apostle"
-                data-title="Floral Apostle" data-artist="saltysojourner">🎵 Load
-                Audio Player</button>
-              <div class="audiomack-player hidden"
-                id="audiomack-player--floral-apostle"></div>
-            </div><br /> (<a href="https://suno.com/s/vWx0ZKi8jW1VxnhQ"
-              target="_blank">recording on Suno</a>)
+            <div class="song-item song-item--audiomack">
+              <div class="song-embed song-embed--audiomack"><button
+                  class="song-embed-btn"
+                  id="song-embed-btn--audiomack--floral-apostle" type="button"
+                  data-embed-src="https://audiomack.com/embed/saltysojourner/song/floral-apostle"
+                  data-title="Floral Apostle">🎵 Load Audiomack Player</button>
+                <div class="song-embed-player hidden"></div>
+              </div>
+            </div>
+            <div class="song-item song-item--suno"><a
+                class="song-link-anchor song-link--suno"
+                href="https://suno.com/s/vWx0ZKi8jW1VxnhQ"
+                target="_blank">recording on Suno</a></div>
           </div><button class="analysis show" id="show-analysis--floral-apostle"
             type="button"
             onclick="document.getElementById('analysis--floral-apostle').style.display = 'block'; document.getElementById('show-analysis--floral-apostle').style.display = 'none';">Show

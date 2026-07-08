@@ -53,16 +53,19 @@
                 href="../all-poems.html?scope=labels&amp;q=hope">hope</a></li>
           </ul>
           <div class="song-link" id="song--divide-and-lose">
-            <div class="audiomack-container"
-              id="audiomack-container--divide-and-lose"><button
-                class="load-audiomack-btn" id="load-audiomack--divide-and-lose"
-                type="button" data-slug="divide-and-lose"
-                data-title="Divide and Lose" data-artist="saltysojourner">🎵
-                Load Audio Player</button>
-              <div class="audiomack-player hidden"
-                id="audiomack-player--divide-and-lose"></div>
-            </div><br /> (<a href="https://suno.com/s/pbEL8k47lgTLgeXg"
-              target="_blank">recording on Suno</a>)
+            <div class="song-item song-item--audiomack">
+              <div class="song-embed song-embed--audiomack"><button
+                  class="song-embed-btn"
+                  id="song-embed-btn--audiomack--divide-and-lose" type="button"
+                  data-embed-src="https://audiomack.com/embed/saltysojourner/song/divide-and-lose"
+                  data-title="Divide and Lose">🎵 Load Audiomack Player</button>
+                <div class="song-embed-player hidden"></div>
+              </div>
+            </div>
+            <div class="song-item song-item--suno"><a
+                class="song-link-anchor song-link--suno"
+                href="https://suno.com/s/pbEL8k47lgTLgeXg"
+                target="_blank">recording on Suno</a></div>
           </div><button class="analysis show"
             id="show-analysis--divide-and-lose" type="button"
             onclick="document.getElementById('analysis--divide-and-lose').style.display = 'block'; document.getElementById('show-analysis--divide-and-lose').style.display = 'none';">Show

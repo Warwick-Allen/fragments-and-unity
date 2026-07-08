@@ -62,16 +62,20 @@
             </li>
           </ul>
           <div class="song-link" id="song--chains-of-sorrow">
-            <div class="audiomack-container"
-              id="audiomack-container--chains-of-sorrow"><button
-                class="load-audiomack-btn" id="load-audiomack--chains-of-sorrow"
-                type="button" data-slug="chains-of-sorrow"
-                data-title="Chains of Sorrow" data-artist="saltysojourner">🎵
-                Load Audio Player</button>
-              <div class="audiomack-player hidden"
-                id="audiomack-player--chains-of-sorrow"></div>
-            </div><br /> (<a href="https://suno.com/s/NRL9PhaDfrKlkBJc"
-              target="_blank">recording on Suno</a>)
+            <div class="song-item song-item--audiomack">
+              <div class="song-embed song-embed--audiomack"><button
+                  class="song-embed-btn"
+                  id="song-embed-btn--audiomack--chains-of-sorrow" type="button"
+                  data-embed-src="https://audiomack.com/embed/saltysojourner/song/chains-of-sorrow"
+                  data-title="Chains of Sorrow">🎵 Load Audiomack
+                  Player</button>
+                <div class="song-embed-player hidden"></div>
+              </div>
+            </div>
+            <div class="song-item song-item--suno"><a
+                class="song-link-anchor song-link--suno"
+                href="https://suno.com/s/NRL9PhaDfrKlkBJc"
+                target="_blank">recording on Suno</a></div>
           </div><button class="analysis show"
             id="show-analysis--chains-of-sorrow" type="button"
             onclick="document.getElementById('analysis--chains-of-sorrow').style.display = 'block'; document.getElementById('show-analysis--chains-of-sorrow').style.display = 'none';">Show

@@ -52,14 +52,19 @@
             </li>
           </ul>
           <div class="song-link" id="song--guilty">
-            <div class="audiomack-container" id="audiomack-container--guilty">
-              <button class="load-audiomack-btn" id="load-audiomack--guilty"
-                type="button" data-slug="guilty" data-title="Guilty"
-                data-artist="saltysojourner">🎵 Load Audio Player</button>
-              <div class="audiomack-player hidden"
-                id="audiomack-player--guilty"></div>
-            </div><br /> (<a href="https://suno.com/s/UMfzfEHFJWEIvH2L"
-              target="_blank">recording on Suno</a>)
+            <div class="song-item song-item--audiomack">
+              <div class="song-embed song-embed--audiomack"><button
+                  class="song-embed-btn" id="song-embed-btn--audiomack--guilty"
+                  type="button"
+                  data-embed-src="https://audiomack.com/embed/saltysojourner/song/guilty"
+                  data-title="Guilty">🎵 Load Audiomack Player</button>
+                <div class="song-embed-player hidden"></div>
+              </div>
+            </div>
+            <div class="song-item song-item--suno"><a
+                class="song-link-anchor song-link--suno"
+                href="https://suno.com/s/UMfzfEHFJWEIvH2L"
+                target="_blank">recording on Suno</a></div>
           </div><button class="analysis show" id="show-analysis--guilty"
             type="button"
             onclick="document.getElementById('analysis--guilty').style.display = 'block'; document.getElementById('show-analysis--guilty').style.display = 'none';">Show

@@ -45,14 +45,19 @@
                 href="../all-poems.html?scope=labels&amp;q=faith">faith</a></li>
           </ul>
           <div class="song-link" id="song--hole">
-            <div class="audiomack-container" id="audiomack-container--hole">
-              <button class="load-audiomack-btn" id="load-audiomack--hole"
-                type="button" data-slug="hole" data-title="Hole"
-                data-artist="saltysojourner">🎵 Load Audio Player</button>
-              <div class="audiomack-player hidden" id="audiomack-player--hole">
+            <div class="song-item song-item--audiomack">
+              <div class="song-embed song-embed--audiomack"><button
+                  class="song-embed-btn" id="song-embed-btn--audiomack--hole"
+                  type="button"
+                  data-embed-src="https://audiomack.com/embed/saltysojourner/song/hole"
+                  data-title="Hole">🎵 Load Audiomack Player</button>
+                <div class="song-embed-player hidden"></div>
               </div>
-            </div><br /> (<a href="https://suno.com/s/0hCPV7lz14xrSOgq"
-              target="_blank">recording on Suno</a>)
+            </div>
+            <div class="song-item song-item--suno"><a
+                class="song-link-anchor song-link--suno"
+                href="https://suno.com/s/0hCPV7lz14xrSOgq"
+                target="_blank">recording on Suno</a></div>
           </div><button class="analysis show" id="show-analysis--hole"
             type="button"
             onclick="document.getElementById('analysis--hole').style.display = 'block'; document.getElementById('show-analysis--hole').style.display = 'none';">Show

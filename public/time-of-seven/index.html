@@ -102,16 +102,19 @@
                 href="../all-poems.html?scope=labels&amp;q=hope">hope</a></li>
           </ul>
           <div class="song-link" id="song--time-of-seven">
-            <div class="audiomack-container"
-              id="audiomack-container--time-of-seven"><button
-                class="load-audiomack-btn" id="load-audiomack--time-of-seven"
-                type="button" data-slug="time-of-seven"
-                data-title="Time of Seven" data-artist="saltysojourner">🎵 Load
-                Audio Player</button>
-              <div class="audiomack-player hidden"
-                id="audiomack-player--time-of-seven"></div>
-            </div><br /> (<a href="https://suno.com/s/MrWYIeCOda53iXgF"
-              target="_blank">recording on Suno</a>)
+            <div class="song-item song-item--audiomack">
+              <div class="song-embed song-embed--audiomack"><button
+                  class="song-embed-btn"
+                  id="song-embed-btn--audiomack--time-of-seven" type="button"
+                  data-embed-src="https://audiomack.com/embed/saltysojourner/song/time-of-seven"
+                  data-title="Time of Seven">🎵 Load Audiomack Player</button>
+                <div class="song-embed-player hidden"></div>
+              </div>
+            </div>
+            <div class="song-item song-item--suno"><a
+                class="song-link-anchor song-link--suno"
+                href="https://suno.com/s/MrWYIeCOda53iXgF"
+                target="_blank">recording on Suno</a></div>
           </div><button class="analysis show" id="show-analysis--time-of-seven"
             type="button"
             onclick="document.getElementById('analysis--time-of-seven').style.display = 'block'; document.getElementById('show-analysis--time-of-seven').style.display = 'none';">Show
