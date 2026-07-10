@@ -33,9 +33,11 @@ editors/             ← Vim syntax highlighting
 ```
 
 Full build: `npm run build`  
-Build + serve: `npm run build:all` → <http://localhost:8080>
+Build + serve: `npm run build:all` → <http://localhost:8080>  
+Tests: `npm test` · Lint/whitespace check: `npm run check` · Build-artefact check: `npm run check:build`
 
-**On WSL/Linux**, npm may resolve Windows binaries. Wrap commands:
+**On WSL/Linux**, npm may resolve Windows binaries. Wrap commands (including the test/check
+scripts above):
 ```bash
 ./scripts/setup-linux.sh npm run build
 ```
@@ -69,7 +71,8 @@ and `poem-syntax.ebnf` for the formal grammar.
 
 1. Edit/create the `.poem` file in `src/poems/poem/` (or equivalently `poems/`)
 2. Run `npm run build` (or `./scripts/setup-linux.sh npm run build` on Linux/WSL)
-3. Commit `.poem` file, the generated `src/poems/yaml/`, `public/`, and `raw/` files
+3. Commit the `.poem` file, plus the generated `public/` and `raw/` files (`src/poems/yaml/`
+   is a local build intermediate, excluded via `.gitignore`)
 
 ## Framework sync
 
@@ -108,7 +111,22 @@ Route it to the right repo: if the deferred work is in the `poetic` framework (a
 under the synced `src/tools/`, `src/templates/`, `scripts/`, `editors/`, or `docs/`), log
 it in the **framework** repo's `TECH-DEBT.md` instead — not here. This repo's `TECH-DEBT.md`
 is for consumer-specific debt (poems, `.shared.poem`, `public/custom.css`, `.poetic-config`,
-CI, deployment).
+CI, deployment). If you add an entry and refer to it elsewhere (e.g., in code comments), note
+that cross-reference in the entry itself, so whoever resolves it knows to also remove those
+references.
+
+## Documentation principles
+
+`CHANGELOG.md` (repo root) is the place to record what changed and when. Add an `[Unreleased]`
+entry (Keep a Changelog format) for any notable change — one visible to poem readers or site
+publishers. Patch-level fixes and routine doc updates don't need entries.
+
+All other docs are as-built: describe the current state only — no "previously", "used to be",
+"now uses", "migration completed", or "old format (deprecated)" phrasing. Git log already
+records history.
+
+If you encounter historical language in an existing doc, remove it and move the substance to
+`CHANGELOG.md` if it's significant.
 
 ## Key docs
 
@@ -119,4 +137,5 @@ CI, deployment).
 | `docs/POEM-TO-YAML.md` | Converter docs |
 | `docs/BUILD.md` | GitHub Pages deployment |
 | `docs/BLOGGER.md` | Auto-publishing poems to Blogger |
+| `docs/VIM-SYNTAX.md` | Vim integration docs |
 | `poem-syntax.ebnf` | Formal EBNF grammar |
