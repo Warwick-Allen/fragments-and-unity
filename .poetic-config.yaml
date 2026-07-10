@@ -1,16 +1,24 @@
-auto_sync: true
-sync_schedule: hourly
-subtitle: Poems by Warwick Allen
-favicon: public/fragments-and-unity.favicon-32.png
-audiomack_artist: saltysojourner
-song_handlers:
-  mega:
-    media_sizes:
-      audio: { aspect_ratio: null, height: "480px" }
+auto_sync:
+  enabled:  true
+  schedule: hourly
 
 # Blogger publishing — see docs/BLOGGER.md. Sensitive OAuth values
 # (client id/secret, refresh token) are GitHub Actions secrets, not stored here.
-blogger_blog_id: "7781143180070523245"
-blogger_label: poem
-blogger_template: public/fragments-and-unity.template.html
-blogger_sync: true
+blogger:
+  blog_id:  "7781143180070523245"
+  label:    poem
+  sync:     true
+  template: public/fragments-and-unity.template.html
+
+favicon:  public/fragments-and-unity.favicon-32.png
+
+song_handlers:
+  audiomack:
+    artist: saltysojourner
+  mega:
+    media_sizes:
+      audio:
+        aspect_ratio: null
+        height:       "480px"
+
+subtitle: Poems by Warwick Allen
