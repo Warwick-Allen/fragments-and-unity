@@ -3,6 +3,10 @@ sync_schedule: hourly
 subtitle: Poems by Warwick Allen
 favicon: public/fragments-and-unity.favicon-32.png
 audiomack_artist: saltysojourner
+song_handlers:
+  mega:
+    media_sizes:
+      audio: { aspect_ratio: null, height: "480px" }
 
 # Blogger publishing — see docs/BLOGGER.md. Sensitive OAuth values
 # (client id/secret, refresh token) are GitHub Actions secrets, not stored here.
