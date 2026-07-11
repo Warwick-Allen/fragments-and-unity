@@ -98,6 +98,9 @@ public/
 ├── all-poems.html                       # Generated concatenated view
 ├── poetic.css                           # Framework CSS (synced from poetic)
 ├── poetic.js                            # Framework JS — shared Audiomack loader (synced)
+├── index.js                             # Poem-grid renderer for index.html (synced)
+├── all-poems.js                         # Sort/filter script for all-poems.html (synced)
+├── date-utils.js                        # Copy of src/tools/date-utils.js (build artefact, gitignored)
 ├── poetic-footer.html                   # Default footer content (synced; see footer.source)
 ├── custom.css                           # User CSS (never overwritten by sync)
 ├── fragments-and-unity.template.html    # Blogger template with injected CSS
@@ -143,6 +146,28 @@ visiting `/<slug>/` shows a properly styled page linking `poetic.css`, `custom.c
 forwards the browser to `./<slug>/` via `<meta http-equiv="refresh">` plus a
 `<link rel="canonical">`. The `<slug>` is the poem's source filename stem (e.g. `my-poem.poem`
 → `/my-poem/`), not derived from the title, so identically-titled poems stay distinct.
+
+### `index.html` and `all-poems.html` client-side scripts
+
+The poem-grid renderer on `index.html` and the sort/filter bar on
+`all-poems.html` are plain framework assets — `public/index.js` and
+`public/all-poems.js` — loaded via `<script src>`, not generated JS strings.
+`build-all-poems.js` only ever writes *data*, never behaviour, into these
+pages:
+
+- `index.html` carries its poem list as a `<script type="application/json"
+  id="poem-data">` data island; `index.js` reads and `JSON.parse`s it. A
+  previously-built `index.html` still carrying an older inline `const
+  allPoems = [...]` script (from before this data island existed) is
+  rewritten to the current format automatically the next time it's built.
+- `all-poems.html` needs no equivalent data island — it reads the poem
+  table/sections already present in its own DOM.
+
+`all-poems.js` sorts the date column using `parseDateForSorting()` from
+`date-utils.js`, loaded first via its own `<script src="date-utils.js">` tag.
+`date-utils.js` has no Node-only dependencies, so the same source file (copied
+verbatim to `public/date-utils.js` at build time — see `copyDateUtilsAsset` in
+`build-all-poems.js`) runs unmodified in Node and in the browser.
 
 ### Shared song-embed loader (`public/poetic.js`)
 
@@ -436,6 +461,7 @@ every key — copy the section you need and uncomment it — lives at
 
 | Key | Default | Description |
 |-----|---------|-------------|
+| `title` | `My Poems` | Site title shown in the `<title>` and `<h1>` on `index.html` and `all-poems.html` |
 | `favicon` | `poetic-logo.svg` | Filename (inside `public/`) of the browser-tab icon |
 | `subtitle` | `My Poems` | Subtitle shown below the site title on `index.html` |
 | `skip_paths` | _(none)_ | List of framework paths to skip during sync |
@@ -454,6 +480,7 @@ every key — copy the section you need and uncomment it — lives at
 Example:
 
 ```yaml
+title: Fragments & Unity
 favicon: my-icon.png
 subtitle: Warwick Allen's Poems
 skip_paths:
@@ -465,6 +492,16 @@ song_handlers:
   audiomack:
     artist: saltysojourner
 ```
+
+#### Title
+
+The site title shown in the `<title>` and `<h1>` on `index.html` and `all-poems.html` defaults to `My Poems`. Override it with the `title` key:
+
+```yaml
+title: Fragments & Unity
+```
+
+An `&` in the configured value is HTML-escaped automatically.
 
 #### Favicon
 
