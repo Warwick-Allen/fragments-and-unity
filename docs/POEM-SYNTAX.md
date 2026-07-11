@@ -29,10 +29,13 @@ A poem file consists of the following sections in strict order:
 The preamble is an optional section at the very beginning of the file that may contain:
 
 - Variable definitions (both single-line and multi-line)
+- Directives (`%name key:value ...`, see [Directives](#directives))
 - Blank lines
 - Comment blocks
 
 This allows you to define variables that can be used in the header (title/author) and throughout the rest of the poem.
+
+Declaring a directive in the Preamble, rather than only in the Metadata section at the bottom of the file, puts it where the parser encounters it first — before the header and content it may affect. A directive that changes how the rest of the poem is parsed needs to be seen this early; a directive declared only in the Metadata section is read last, after everything it would apply to.
 
 ### Shared Variables (.shared.poem)
 
@@ -77,7 +80,7 @@ The header appears at the beginning of the file and consists of:
 
 ### Fields
 
-- **Title** (mandatory): The title of the poem (any text, may include variable references)
+- **Title** (mandatory): The title of the poem (any text, may include variable references). A title that must start with a literal `%` is written `\%…` (see [Escaped Characters](#escaped-characters)) — a bare `%…` line at the top of the file is otherwise read as a Preamble directive
 - **Author** (optional): The author's name. If omitted, defaults to `${author}` which will be expanded if the variable is defined, or left as the literal text `${author}` if not (may include variable references)
 - **Date** (mandatory): Must be in format `YYYY-MM-DD` (e.g., `1970-01-01`) after variable substitution
 
@@ -558,6 +561,8 @@ Authoritative syntax:
 - Capture group 2 is zero or more whitespace-separated `key:value` attribute pairs
 - Capture group 3 is an optional trailing `# comment`
 
+A directive line may also appear in the [Preamble](#0-preamble-section), at the very top of the file, with this same syntax. When directives are declared in both the Preamble and the Metadata section, they are collected into a single `directives` list in source order — Preamble directives first, then Metadata directives. Directives are not de-duplicated (unlike labels): each directive line becomes its own entry, even if its name and attributes repeat.
+
 Directives change Poetic's behaviour. No directives are currently defined or acted upon — every directive is parsed and preserved in the poem's data for future use.
 
 ### Labels
@@ -943,10 +948,28 @@ Use backslash to prevent markup conversion:
 | `\>` | `>` |
 | `\=` | `=` |
 | `\$` | `$` |
+| `\%` | `%` |
 | `\/` | `/` |
 | `\{` | `{` |
 | `\}` | `}` |
 | `\\` | `\` |
+
+`\%` decodes to `%` only when it is **not** immediately followed by `{`: the
+sequence `\%{…}` is left untouched, because `\%{name}` is the render-time
+context-variable literal escape (see [Context (build-time)
+variables](#context-build-time-variables)) and must survive to that later
+stage. This escape also applies in the title (see [Title
+(mandatory)](#fields) above), even though the title does not otherwise go
+through this inline dialect.
+
+`\?` is **reserved** for a future extended-escape family and is not a normal
+escape: wherever Poetic interprets its own escapes (the poem body and labels
+above, and [parameter values](#value-scanning-quotes-and-backslashes)), a `\?`
+raises a build error instead of decoding to anything. Write `\\?` for a literal
+backslash followed by `?` (the escaped backslash decodes to `\`, and the `?`
+is then just a plain character). This reservation does not reach inside raw
+`<<<...>>>` blocks or the Markdown analysis/postscript sections, which have
+their own escaping.
 
 ### Markup Rules
 
@@ -960,6 +983,11 @@ Use backslash to prevent markup conversion:
    The **analysis** and **postscript** sections, and `<<<markdown>>>` blocks, are
    instead rendered as full GitHub-Flavoured Markdown (see
    [Markdown Sections](#markdown-sections-analysis-postscript-and-markdown-blocks)).
+
+   The **title** does not go through this dialect (no emphasis, links, smart
+   quotes, and so on), but it does honour the single `\%` → `%` escape (see
+   [Escaped Characters](#escaped-characters)), so a title may start with a
+   literal `%`.
 
 ## Markdown Sections (Analysis, Postscript, and Markdown Blocks)
 
@@ -1049,6 +1077,59 @@ This won't appear in the output
 ```
 
 ## 11. Structural Rules
+
+### Line Continuation
+
+A physical line ending in a run of backslashes immediately before the
+newline — with no trailing whitespace after the last backslash — is folded
+according to the same odd/even rule used for the mid-line `\\` → `\` escape
+(see [Escaped Characters](#escaped-characters)):
+
+- A trailing run of *N* backslashes contributes `floor(N/2)` literal
+  backslashes to the line.
+- If *N* is **odd**, the newline is also nullified, joining the next physical
+  line onto this one. A lone `\` at the end of a line is the simplest case: it
+  and the newline both disappear, and the following line is joined on with no
+  literal backslash left behind.
+- If *N* is **even**, the newline is kept — this is not a continuation. `\\`
+  at the end of a line is one literal backslash with the line break preserved.
+- The rule chains: `\\\` (three backslashes) is one literal backslash,
+  followed by a continuation onto the next line.
+- A backslash followed by whitespace before the newline is not a continuation
+  — trailing whitespace after the last backslash means the run doesn't reach
+  the newline at all.
+
+This is a lexical pre-pass that runs before section parsing, at the
+logical-line level — so it can fold a long title, an author line, a label, a
+poem-body line, an audio embed line, or a parameter list across several
+physical lines in the source file. A continuation whose next physical line
+doesn't exist (end of file) or is itself a structural block marker (`<<<`,
+`>>>`, and so on) is left dangling: its `floor(N/2)` literal backslashes are
+kept and nothing is joined, so a continuation can never swallow a block
+marker.
+
+**Scope:** Line continuation does not reach inside a raw `<<<...>>>` literal
+block or a `<<<markdown>>>` block — their content is passed through (or
+handed to the Markdown renderer) verbatim, so a trailing backslash there is
+kept exactly as written.
+
+**Continuation only removes the newline** — it does not change any other
+syntax. A parameter list split across continued lines still needs its comma
+separators between items:
+
+```
+Mega: \
+  AbC1dEfG#h1JkLmN0pQrStUvWxYz0123456789AbCdEfGh ( \
+    ratio=21:9, \
+    height=400 \
+  )
+```
+
+is exactly equivalent to writing it on one line:
+
+```
+Mega: AbC1dEfG#h1JkLmN0pQrStUvWxYz0123456789AbCdEfGh (ratio=21:9, height=400)
+```
 
 ### Line Anchoring
 
