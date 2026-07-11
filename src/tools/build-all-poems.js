@@ -15,7 +15,7 @@ const yaml = require("js-yaml");
 const { slugFromFile } = require("./slugify");
 const { parseDateForSorting, formatDateForDisplay, toISODate } = require("./date-utils");
 const { readPoeticConfig } = require("./poetic-config");
-const { loadPoemData, renderFragment } = require("./poem-render");
+const { loadPoemData, renderFragment, listPoemYamlFiles } = require("./poem-render");
 const { hasResolvableSongs } = require("./song-handlers");
 const { renderFooter, upsertFooter } = require("./footer");
 const { REPO_ROOT } = require("./repo-root");
@@ -60,11 +60,7 @@ function concatenateAllHtmlFiles(
   try {
     const siteTitle = escapeAmpersand(config.title || "My Poems");
     // Read YAML files from the poems directory for metadata
-    const yamlFiles = fs
-      .readdirSync(poemsDir)
-      .filter((file) => file.endsWith(".yaml") || file.endsWith(".yml"))
-      .filter((file) => !file.startsWith("YAML-SCHEMA"))
-      .filter((file) => !file.startsWith("_")); // Skip files beginning with underscore
+    const yamlFiles = listPoemYamlFiles(poemsDir);
 
     if (yamlFiles.length === 0) {
       return {
@@ -198,9 +194,9 @@ function concatenateAllHtmlFiles(
             <table class="toc-table" id="poemTable">
                 <thead>
                     <tr>
-                        <th class="sortable" onclick="sortTable(0, 'title')">Poem Title</th>
-                        <th class="sortable" onclick="sortTable(1, 'date')">Poem Date</th>
-                        <th class="sortable" onclick="sortTable(2, 'audio')">🎵 Audio</th>
+                        <th class="sortable" aria-sort="none"><button type="button" class="sort-button" data-column="0" data-sort-type="title">Poem Title</button></th>
+                        <th class="sortable" aria-sort="none"><button type="button" class="sort-button" data-column="1" data-sort-type="date">Poem Date</button></th>
+                        <th class="sortable" aria-sort="none"><button type="button" class="sort-button" data-column="2" data-sort-type="audio">🎵 Audio</button></th>
                     </tr>
                 </thead>
                 <tbody id="poemTableBody">`;
@@ -277,12 +273,7 @@ function generateIndexHtml(
 ) {
   try {
     // Read YAML files from the poems directory for metadata
-    const yamlFiles = fs
-      .readdirSync(poemsDir)
-      .filter((file) => file.endsWith(".yaml") || file.endsWith(".yml"))
-      .filter((file) => !file.startsWith("YAML-SCHEMA"))
-      .filter((file) => !file.startsWith("_")) // Skip files beginning with underscore
-      .sort(); // Sort alphabetically for consistent ordering
+    const yamlFiles = listPoemYamlFiles(poemsDir).sort(); // Sort alphabetically for consistent ordering
 
     // Extract poem data from YAML files
     const poemData = [];
