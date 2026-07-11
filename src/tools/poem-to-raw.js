@@ -27,8 +27,9 @@ const { parsePoemFile } = require('./poem-to-yaml');
 const { substituteContextVars, CONTEXT_VAR_NAMES } = require('./poem-render');
 const { slugFromFile } = require('./slugify');
 const { formatDateForDisplay } = require('./date-utils');
-const { readPoeticConfig } = require('./poetic-config');
-const { renderFooter, upsertFooter } = require('./footer');
+const { readPoeticConfig, CONFIG_FILENAME } = require('./poetic-config');
+const { renderFooter, upsertFooter, resolveFooterSourcePath } = require('./footer');
+const { needsRebuild, needsRebuildAggregate, recordManifest, forceRebuildRequested } = require('./needs-rebuild');
 
 // Named HTML entities the engine (and Markdown) can emit, mapped to Unicode.
 const NAMED_ENTITIES = {
@@ -200,35 +201,72 @@ function main() {
   fs.mkdirSync(rawDir, { recursive: true });
   fs.mkdirSync(publicRawDir, { recursive: true });
 
+  const force = forceRebuildRequested();
+  const sharedPoemPath = path.join(poemDir, '.shared.poem');
+
   const files = fs.readdirSync(poemDir)
     .filter((f) => f.endsWith('.poem') && !f.startsWith('_') && !f.startsWith('.'))
     .sort();
 
   const entries = [];
+  let skippedCount = 0;
   for (const file of files) {
     const poemPath = path.join(poemDir, file);
     const stem = path.basename(file, '.poem');
+    const rawOutputPath = path.join(rawDir, stem);
+    // parsePoemFile always has to run — public/raw/index.html's entries need
+    // every poem's title regardless of whether that poem's own raw/<stem>
+    // needs rewriting — so the check below only skips the (more expensive)
+    // plain-text rendering and file write, not the parse.
     try {
       const data = parsePoemFile(poemPath);
-      const slug = slugFromFile(poemPath);
-      const text = renderPoemText(data, slug);
-      fs.writeFileSync(path.join(rawDir, stem), text, 'utf8');
       const title = htmlToPlainText(String(data.title || '')).trim();
       entries.push({ stem, title });
+
+      const inputs = [poemPath, ...(fs.existsSync(sharedPoemPath) ? [sharedPoemPath] : [])];
+      if (!needsRebuild(rawOutputPath, inputs, { force })) {
+        skippedCount++;
+        continue;
+      }
+
+      const slug = slugFromFile(poemPath);
+      const text = renderPoemText(data, slug);
+      fs.writeFileSync(rawOutputPath, text, 'utf8');
     } catch (error) {
       console.error(`Error converting ${file}:`, error.message);
     }
+  }
+  if (skippedCount > 0) {
+    console.log(`⏭  ${skippedCount} poem(s) already up to date, skipped.`);
   }
 
   const config = readPoeticConfig(repoTop);
   // public/raw/index.html lives one directory deep, like individual poem pages.
   const footerBlock = renderFooter(config, repoTop, { base: '../' });
+  const footerSourcePath = resolveFooterSourcePath(config, repoTop);
+  const configPath = path.join(repoTop, CONFIG_FILENAME);
+  const indexOutputPath = path.join(publicRawDir, 'index.html');
+  const manifestPath = path.join(publicRawDir, '.raw-index.manifest.json');
+  // The index lists every poem, so its source set is every file in poemDir.
+  // A poem added to / removed from that set is detected by comparing the set
+  // against a sidecar manifest (see needsRebuildAggregate) rather than the
+  // directory's own mtime, which not every filesystem or sync tool bumps.
+  const sources = fs.readdirSync(poemDir).map((f) => path.join(poemDir, f));
+  const extraInputs = [
+    ...(fs.existsSync(configPath) ? [configPath] : []),
+    ...(fs.existsSync(footerSourcePath) ? [footerSourcePath] : []),
+  ];
+  if (!needsRebuildAggregate(indexOutputPath, sources, { manifestPath, baseDir: poemDir, extraInputs, force })) {
+    console.log('⏭  public/raw/index.html is up to date, skipping.');
+    return;
+  }
 
   fs.writeFileSync(
-    path.join(publicRawDir, 'index.html'),
+    indexOutputPath,
     upsertFooter(buildIndex(entries, githubRepoSlug(repoTop)), footerBlock),
     'utf8'
   );
+  recordManifest(manifestPath, sources, poemDir);
 }
 
 if (require.main === module) main();
