@@ -4,7 +4,7 @@ These are shared publicly at [Fragments & Unity] and [GitHub Pages].
 
 The authoring framework used by this repo is available separately at [poetic].
 
-[poetic]: https://github.com/warwickallen/poetic
+[poetic]: https://github.com/Poetic-Poems/poetic
 
 ## Repository Structure
 
