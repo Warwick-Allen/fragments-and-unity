@@ -6,5 +6,7 @@ node_modules
 
 src/poems/yaml/*.yaml
 public/*.html
+public/.all-poems.manifest.json
+public/raw/.raw-index.manifest.json
 
 .blogger-credentials.json
