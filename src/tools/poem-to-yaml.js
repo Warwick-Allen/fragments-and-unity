@@ -31,11 +31,19 @@ class PoemParser {
     // Remove comment blocks first
     this.removeCommentBlocks();
 
+    // Fold trailing-backslash line continuations into logical lines, before any
+    // section parsing. `<<<...>>>` block interiors are left untouched.
+    this.joinContinuedLines();
+
     // Process variables (extract and remove definition lines)
     this.processVariables();
 
     // Strip ignored trailing text after line-anchored tokens (spec section 10)
     this.normalizeTokenLines();
+
+    // Extract Preamble directives (before the header/title) so they are seen
+    // early, ahead of any declared in the Metadata section.
+    this.extractPreambleDirectives();
 
     this.parseHeader();
     this.parseVersions();
@@ -99,6 +107,84 @@ class PoemParser {
     }
 
     this.lines = newLines;
+  }
+
+  /**
+   * Fold trailing-backslash line continuations into logical lines.
+   *
+   * A physical line ending in a run of N backslashes immediately before the
+   * newline — with no trailing whitespace — contributes floor(N/2) literal
+   * backslashes, and the newline is nullified (the next physical line is joined
+   * on) iff N is odd. So a lone `\`+newline continues the line, while `\\`+
+   * newline is one literal backslash with the newline kept; the rule chains, so
+   * `\\\`+newline is one literal backslash followed by a continuation. This
+   * mirrors the mid-line `\\`→`\` decoding done later by convertMarkup().
+   *
+   * Continuation does not reach into `<<<...>>>` blocks (raw literal or
+   * markdown): their content is passed through or handed to another renderer
+   * verbatim, so a trailing backslash there is kept as written. A dangling
+   * continuation at end of file — or one whose next physical line is a
+   * structural block marker — keeps its floor(N/2) literal backslashes with
+   * nothing joined (the block marker is never swallowed).
+   */
+  joinContinuedLines() {
+    const out = [];
+    let inBlock = false;
+    let i = 0;
+
+    while (i < this.lines.length) {
+      let line = this.lines[i];
+
+      // Block markers and their interiors are opaque to continuation.
+      if (this.blockStartTag(line) !== null) { inBlock = true; out.push(line); i++; continue; }
+      if (this.isBlockEnd(line)) { inBlock = false; out.push(line); i++; continue; }
+      if (inBlock) { out.push(line); i++; continue; }
+
+      // Fold a (possibly multi-line) chain of continuations into `line`.
+      while (true) {
+        // Trailing backslash run, tolerating a CR from CRLF-terminated input.
+        const m = line.match(/(\\+)(\r?)$/);
+        if (m === null) break;
+
+        const run = m[1].length;
+        const cr = m[2];
+        const head = line.slice(0, line.length - m[0].length);
+        const literal = head + '\\'.repeat(Math.floor(run / 2));
+
+        if (run % 2 === 0) { line = literal + cr; break; } // even: newline kept
+
+        // Odd run: a continuation. Join the next physical line, unless there is
+        // none (EOF) or it is a structural block marker (never swallowed).
+        const next = this.lines[i + 1];
+        if (next === undefined ||
+            this.blockStartTag(next) !== null || this.isBlockEnd(next)) {
+          line = literal;
+          break;
+        }
+        line = literal + next;
+        i++; // the next physical line has been consumed into this logical line
+      }
+
+      out.push(line);
+      i++;
+    }
+
+    this.lines = out;
+  }
+
+  /**
+   * The `\?` escape prefix is reserved for a future extended-escape family and
+   * is not yet implemented (see docs/POEM-SYNTAX.md). Until then it is a hard
+   * error wherever Poetic interprets its own escapes — the WYSIWYG poem body and
+   * labels (convertMarkup) and parameter values (scanShellWord). `\\?` (an
+   * escaped backslash, then a literal `?`) is the way to write a literal `\?`.
+   */
+  reservedEscapeError() {
+    return new Error(
+      "Reserved syntax: '\\?' is reserved but not yet implemented " +
+      "(the '\\?' escape prefix is reserved for a future extended-escape family; " +
+      "see docs/POEM-SYNTAX.md). Write '\\\\?' for a literal backslash then '?'."
+    );
   }
 
   /**
@@ -243,6 +329,7 @@ class PoemParser {
           if (i >= n) return null; // unterminated quote
           const dc = str[i];
           if (dc === '"') { i++; break; } // closing quote
+          if (dc === '\\' && str[i + 1] === '?') throw this.reservedEscapeError();
           if (dc === '\\' && i + 1 < n && '"\\$`'.includes(str[i + 1])) {
             value += str[i + 1];
             i += 2;
@@ -265,6 +352,7 @@ class PoemParser {
       if (c === '\\') {
         // Unquoted backslash-escape: literal next character, whatever it is.
         if (i + 1 < n) {
+          if (str[i + 1] === '?') throw this.reservedEscapeError();
           value += str[i + 1];
           i += 2;
           continue;
@@ -694,6 +782,45 @@ class PoemParser {
   }
 
   /**
+   * Decode the `\%` → `%` character escape. A backslash-escaped percent becomes
+   * a literal `%`, EXCEPT the sequence `\%{`, which is left untouched: `\%{name}`
+   * is the render-time context-variable literal escape, decoded later by
+   * substituteContextVars() in poem-render.js, which relies on the backslash
+   * surviving this parse stage. The negative lookahead `(?!\{)` is what enforces
+   * that carve-out. This lets a title (or body/label text) begin with a literal
+   * `%` without being mistaken for a directive.
+   */
+  decodePercentEscape(text) {
+    return text.replace(/\\%(?!\{)/g, '%');
+  }
+
+  /**
+   * Extract directives declared in the Preamble — section 0, at the very top of
+   * the file, before the header/title — into this.result.directives, removing
+   * their lines so the header parse that follows sees only the title onward.
+   *
+   * Runs after the variable-definition and comment-block pre-passes, so only
+   * blank lines and directive lines can precede the title here. Scanning stops
+   * at the first non-blank, non-directive line (the start of the header). Blank
+   * lines are left in place for parseHeader's skipBlankLines to consume.
+   *
+   * Preamble directives are collected before parseMetadata runs, so they land
+   * in result.directives ahead of any directives declared in the Metadata
+   * section — preamble first, then metadata, in overall source order.
+   */
+  extractPreambleDirectives() {
+    let i = 0;
+    while (i < this.lines.length) {
+      const line = this.lines[i];
+      if (line.trim() === '') { i++; continue; } // blank: leave for skipBlankLines
+      const directive = this.parseDirectiveLine(line);
+      if (directive === null) break; // first non-directive line begins the header
+      this.pushDirective(directive);
+      this.lines.splice(i, 1); // remove; the next line shifts into position i
+    }
+  }
+
+  /**
    * Parse header section (title, author, date)
    */
   parseHeader() {
@@ -704,7 +831,10 @@ class PoemParser {
     if (!title) {
       throw new Error('Missing title');
     }
-    this.result.title = this.substituteVariables(title.trim());
+    // Decode `\%` → `%` so a title may begin with a literal `%` without being
+    // read as a Preamble directive. `\%{...}` is preserved (see
+    // decodePercentEscape) for the render stage.
+    this.result.title = this.decodePercentEscape(this.substituteVariables(title.trim()));
 
     // Author (optional) or Date
     let line = this.next();
@@ -1391,6 +1521,46 @@ class PoemParser {
   }
 
   /**
+   * Recognise a directive line (`%name key:value ...`, with an optional trailing
+   * `# comment`) and build its structured form. Returns `{ name, attributes? }`
+   * — where `attributes` maps each `key:value` token (split on its first `:`)
+   * and is omitted entirely when the directive has no attributes — or `null`
+   * when `line` is not a directive.
+   *
+   * Shared by the Metadata section (parseMetadata) and the Preamble pre-pass
+   * (extractPreambleDirectives), so a directive parses identically wherever it
+   * is declared.
+   */
+  parseDirectiveLine(line) {
+    const directiveRe = /^\s*%([\w.-]+)((?:\s+[\w.]+:[\w.-]+)*)(\s+#.*)?\s*$/i;
+    const m = line.match(directiveRe);
+    if (!m) return null;
+
+    const directive = { name: m[1] };
+    const attrsRaw = m[2] ? m[2].trim() : '';
+    if (attrsRaw !== '') {
+      const attributes = {};
+      for (const token of attrsRaw.split(/\s+/)) {
+        const colonIndex = token.indexOf(':');
+        const key = token.slice(0, colonIndex);
+        const value = token.slice(colonIndex + 1);
+        attributes[key] = value;
+      }
+      directive.attributes = attributes;
+    }
+    return directive;
+  }
+
+  /**
+   * Append a parsed directive to this.result.directives, lazily creating the
+   * array so the key stays absent when a poem declares no directives.
+   */
+  pushDirective(directive) {
+    if (!this.result.directives) this.result.directives = [];
+    this.result.directives.push(directive);
+  }
+
+  /**
    * Parse metadata section (directives and labels)
    *
    * Reads lines until the end-of-file marker (====) or EOF, without
@@ -1407,7 +1577,6 @@ class PoemParser {
   parseMetadata() {
     this.skipBlankLines();
 
-    const directiveRe = /^\s*%([\w.-]+)((?:\s+[\w.]+:[\w.-]+)*)(\s+#.*)?\s*$/i;
     const labelRe = /^\s*#([^&<>\\#\s]+?)(\s+#.*)?\s*$/i;
     const seenLabels = new Set();
 
@@ -1430,24 +1599,9 @@ class PoemParser {
         continue;
       }
 
-      const directiveMatch = line.match(directiveRe);
-      if (directiveMatch) {
-        const directive = { name: directiveMatch[1] };
-        const attrsRaw = directiveMatch[2] ? directiveMatch[2].trim() : '';
-        if (attrsRaw !== '') {
-          const attributes = {};
-          for (const token of attrsRaw.split(/\s+/)) {
-            const colonIndex = token.indexOf(':');
-            const key = token.slice(0, colonIndex);
-            const value = token.slice(colonIndex + 1);
-            attributes[key] = value;
-          }
-          directive.attributes = attributes;
-        }
-        if (!this.result.directives) {
-          this.result.directives = [];
-        }
-        this.result.directives.push(directive);
+      const directive = this.parseDirectiveLine(line);
+      if (directive) {
+        this.pushDirective(directive);
         this.next();
         continue;
       }
@@ -1477,10 +1631,23 @@ class PoemParser {
    * Convert inline markup to HTML
    */
   convertMarkup(text) {
-    // Process escapes first
+    // `\?` is reserved for a future extended-escape family (see
+    // docs/POEM-SYNTAX.md) and is an error until it is implemented. Only an
+    // ODD backslash run before `?`
+    // triggers it; `\\?` (even) is a literal `\` then `?`, decoded by the escape
+    // table below.
+    for (const m of text.matchAll(/(\\+)\?/g)) {
+      if (m[1].length % 2 === 1) throw this.reservedEscapeError();
+    }
+
+    // Process escapes first. The escape class also decodes `\%` → `%`, but NOT
+    // `\%{`: `\%{name}` is the render-time context-variable literal escape and
+    // must survive this stage (it is decoded later by substituteContextVars()
+    // in poem-render.js). The `%(?!\{)` alternative — a `%` not followed by `{`
+    // — is what carves `\%{` out; every other class character is unconditional.
     const escapes = new Map();
     let escapeIndex = 0;
-    text = text.replace(/\\([_*~[`"&'\-<>=$\\/{}])/g, (match, char) => {
+    text = text.replace(/\\(%(?!\{)|[_*~[`"&'\-<>=$\\/{}])/g, (match, char) => {
       const placeholder = `\x00ESCAPE${escapeIndex++}\x00`;
       escapes.set(placeholder, char);
       return placeholder;
@@ -1572,12 +1739,24 @@ function parsePoemFile(poemFilePath, options = {}) {
   return new PoemParser(content).parse();
 }
 
+// Canonical order for the top-level result keys, independent of which one
+// happened to be assigned first during parsing (e.g. `directives` may be
+// populated by a preamble directive before `title` is parsed). Keys not
+// listed here (all keys within nested mappings) keep their insertion order,
+// since the comparator returns 0 for any pair it doesn't recognise and
+// Array.prototype.sort is stable.
+const TOP_LEVEL_KEY_ORDER = [
+  'title', 'author', 'date', 'versions', 'audio', 'postscript', 'analysis',
+  'labels', 'directives',
+];
+
 function convertPoemToYaml(poemFilePath, options = {}) {
   const data = parsePoemFile(poemFilePath, options);
 
   return yaml.dump(data, {
     lineWidth: -1, // Don't wrap lines
     noRefs: true,  // Don't use YAML references
+    sortKeys: (a, b) => TOP_LEVEL_KEY_ORDER.indexOf(a) - TOP_LEVEL_KEY_ORDER.indexOf(b),
   });
 }
 
