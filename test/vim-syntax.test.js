@@ -51,12 +51,12 @@ function dumpSyntax() {
   }
 }
 
-// Returns, for each 1-indexed source line of FIXTURE, the array of raw
-// (untranslated, unfolded) syntax group names present on that line. Powers
-// the version-tolerant markdown-delegation smoke check below -- see
-// test/fixtures/dump-syntax-groups.vim for why this is a separate dump from
-// dumpSyntax()'s golden-comparison one.
-function dumpRawGroupsByLine() {
+// Returns, for each 1-indexed source line of `file` (FIXTURE by default),
+// the array of raw (untranslated, unfolded) syntax group names present on
+// that line. Powers the version-tolerant markdown-delegation smoke check
+// below -- see test/fixtures/dump-syntax-groups.vim for why this is a
+// separate dump from dumpSyntax()'s golden-comparison one.
+function dumpRawGroupsByLine(file = FIXTURE) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'poem-vim-syntax-raw-'));
   const outPath = path.join(tmpDir, 'dump.txt');
   try {
@@ -69,7 +69,7 @@ function dumpRawGroupsByLine() {
         '-c', 'set filetype=poem',
         '-S', RAW_GROUPS_SCRIPT,
         '-c', 'qa!',
-        FIXTURE,
+        file,
       ],
       { env: { ...process.env, POEM_VIM_DIR: VIM_SYNTAX_DIR, DUMP_OUT: outPath } }
     );
@@ -140,5 +140,92 @@ test(
         'poemAnalysis region\'s contains=@poemMarkdown wiring in editors/vim/syntax/poem.vim is ' +
         'broken.'
     );
+  }
+);
+
+test(
+  'trailing-backslash line continuation and the reserved "\\?" sequence are highlighted',
+  { skip: vimSkipReason() },
+  () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'poem-vim-syntax-continuation-'));
+    const tmpFile = path.join(tmpDir, 'continuation.poem');
+    try {
+      fs.writeFileSync(
+        tmpFile,
+        [
+          'A line that continues here\\',
+          'onto the next line.',
+          '',
+          'A reserved \\? sequence here.',
+          '',
+          'A literal backslash at the end, escaped\\\\',
+        ].join('\n')
+      );
+      const rawGroupsByLine = dumpRawGroupsByLine(tmpFile);
+      assert.ok(
+        rawGroupsByLine[0].includes('poemLineContinuation'),
+        `Expected poemLineContinuation on the single-trailing-backslash line, got: ` +
+          `${JSON.stringify(rawGroupsByLine[0])}`
+      );
+      assert.ok(
+        rawGroupsByLine[3].includes('poemReservedEscape'),
+        `Expected poemReservedEscape on the "\\?" line, got: ${JSON.stringify(rawGroupsByLine[3])}`
+      );
+      assert.ok(
+        !rawGroupsByLine[5].includes('poemLineContinuation'),
+        `A doubled trailing backslash is an escaped literal backslash (poemEscaped), not a ` +
+          `continuation marker, so poemLineContinuation must not match it: ` +
+          `${JSON.stringify(rawGroupsByLine[5])}`
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  'a Preamble %directive, the "\\%" escape, and the "\\%{...}" context-var escape are highlighted',
+  { skip: vimSkipReason() },
+  () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'poem-vim-syntax-percent-'));
+    const tmpFile = path.join(tmpDir, 'percent.poem');
+    try {
+      fs.writeFileSync(
+        tmpFile,
+        [
+          '%example.preamble key:value',
+          'A Title Here',
+          '1970-01-01',
+          '',
+          'An escaped \\% percent sign.',
+          '',
+          'A context escape \\%{slug} left untouched.',
+        ].join('\n')
+      );
+      const rawGroupsByLine = dumpRawGroupsByLine(tmpFile);
+      assert.ok(
+        rawGroupsByLine[0].includes('poemDirective'),
+        `Expected poemDirective on the Preamble %directive line, got: ` +
+          `${JSON.stringify(rawGroupsByLine[0])}`
+      );
+      assert.ok(
+        rawGroupsByLine[1].includes('poemTitle'),
+        `Expected poemTitle on the line following the Preamble directive (verifying the ` +
+          `title/preamble boundary accounts for %directive lines), got: ` +
+          `${JSON.stringify(rawGroupsByLine[1])}`
+      );
+      assert.ok(
+        rawGroupsByLine[4].includes('poemEscaped'),
+        `Expected poemEscaped on the "\\%" line, got: ${JSON.stringify(rawGroupsByLine[4])}`
+      );
+      assert.ok(
+        !rawGroupsByLine[6].includes('poemEscaped'),
+        `"\\%{...}" is the render-time context-variable literal escape and must keep its ` +
+          `backslash unhighlighted as poemEscaped, so the "%" not-followed-by-"{" lookahead ` +
+          `must not match it: ${JSON.stringify(rawGroupsByLine[6])}`
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   }
 );

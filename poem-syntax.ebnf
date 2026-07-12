@@ -43,13 +43,33 @@ poem_file = [ preamble ],
                               blank_lines,
                               [ ignored_content ] ] ] ] ] ] ] ] ] ] ;
 
+(* Note: Before poem_file is parsed into sections, an earlier lexical pre-pass
+   removes every comment_block (see COMMENT BLOCKS below) from the raw file
+   content - comment_block can be written anywhere in the source text (see
+   semantic constraint 13) and so never reaches the productions below at all,
+   except where a production references comment_block explicitly (e.g.
+   preamble_item) to stay consistent with docs/POEM-SYNTAX.md's prose about
+   what that section may contain. A second, later pre-pass folds
+   trailing-backslash line continuations into logical lines (see semantic
+   constraint 38); <<<...>>> block interiors are exempt from that pre-pass. *)
+
 (* ============================================================================
    PREAMBLE SECTION
    ============================================================================ *)
 
 preamble = preamble_item, { preamble_item } ;
 
-preamble_item = blank_line | variable_definition ;
+(* A directive_line may appear here as well as in the metadata_section (see
+   METADATA SECTION and semantic constraint 40 below); the preamble_item
+   alternative is the ONLY place other than metadata_line that directive_line
+   is referenced. Scanning for preamble directives stops at the first line
+   that is neither blank nor a directive_line, nor part of a comment_block
+   (comment blocks are already gone by the time preamble scanning runs - see
+   the pre-pass note above) - that line begins the header. comment_block is
+   listed here because a comment_block is valid to write in the preamble (see
+   docs/POEM-SYNTAX.md section 0), even though the pre-pass strips it before
+   this production is derived. *)
+preamble_item = blank_line | variable_definition | directive_line | comment_block ;
 
 (* ============================================================================
    HEADER SECTION
@@ -308,7 +328,10 @@ analysis_content = gfm_content ;
    METADATA SECTION
    The Metadata section holds two line types: directives and labels. It is
    the last section of a poem file, delimited by end_of_analysis_marker
-   before it and end_of_file_marker after it (see poem_file).
+   before it and end_of_file_marker after it (see poem_file). A directive_line
+   (but not a label_line) may ALSO appear in the preamble (see preamble_item
+   above and semantic constraint 40) - directives declared there are collected
+   ahead of any declared here, in source order (see semantic constraint 40).
    ============================================================================ *)
 
 metadata_section = { metadata_line } ;
@@ -391,8 +414,10 @@ comment_end = "#>>", { ? any character except newline ? }, newline ;
 
 comment_line = { ? any character except newline ? }, newline ;
 
-(* Note: Comment blocks can appear anywhere in the file and are completely
-   ignored during parsing. They do not contribute to the output. *)
+(* Note: comment_block can appear anywhere in the file (see the lexical
+   pre-pass note under TOP-LEVEL STRUCTURE, semantic constraint 13, and
+   preamble_item above) and is completely removed before poem_file is
+   derived. It does not contribute to the output. *)
 
 (* ============================================================================
    VARIABLES
@@ -485,7 +510,15 @@ markup_element = escaped_char
                | variable_substitution
                | plain_char ;
 
-escaped_char = "\", ( "_" | "*" | "~" | "[" | "`" | '"' | "&" | "'" | "-" | "<" | ">" | "=" | "$" | "/" | "{" | "}" | "\" ) ;
+(* "\%" decodes to a literal "%" EXCEPT as the first two characters of
+   "\%{", which is left untouched: "\%{name}" is context_variable_substitution's
+   literal-escape alternative (see above) and must keep its backslash so it
+   can be decoded later, at the render stage. This mirrors how "\$" here
+   coexists with variable_substitution's "\${" alternative, but - unlike
+   "${...}", which is resolved and so no longer contains a backslash by the
+   time escaped_char applies - "%{...}" is NOT resolved at this stage, so the
+   "\%{" carve-out must be enforced explicitly (see semantic constraint 41). *)
+escaped_char = "\", ( "_" | "*" | "~" | "[" | "`" | '"' | "&" | "'" | "-" | "<" | ">" | "=" | "$" | "%" | "/" | "{" | "}" | "\" ) ;
 
 (* Emphasis follows Markdown conventions: single markers = italic, double = bold. *)
 emphasis = ( "*", markup_content, "*" ) | ( "_", markup_content, "_" ) ;
@@ -663,7 +696,9 @@ leading_whitespace = ( " " | tab ), { " " | tab } ;
        (`/.class{}`) is valid and produces `<span class="class"></span>`
 
    13. Comment blocks (<<# ... #>>) can appear anywhere and are completely
-       removed during parsing
+       removed during parsing - formalised as the comment_block-removal
+       lexical pre-pass described under TOP-LEVEL STRUCTURE and referenced
+       from preamble_item and comment_block above
 
    14. The author line is optional; if omitted, defaults to the value of the ${author} variable
 
@@ -807,6 +842,69 @@ leading_whitespace = ( " " | tab ), { " " | tab } ;
       37. A directive with no attribute tokens omits the `attributes` field
          entirely from its parsed representation - there is no empty-object
          form for a directive with no attributes.
+
+      38. A lexical pre-pass, run before any section parsing, folds
+         trailing-backslash line continuations into logical lines. A
+         physical line ending in a run of N backslashes immediately before
+         the newline, with no trailing whitespace after the last
+         backslash, contributes floor(N/2) literal backslashes to the
+         line; iff N is odd, the newline is also nullified and the next
+         physical line is joined onto this one. The rule chains and
+         mirrors the mid-line `\\` -> `\` decoding of escaped_char: a lone
+         `\` at end of line is a continuation (both it and the newline
+         disappear); `\\` at end of line is one literal backslash with the
+         newline kept (not a continuation); `\\\` is one literal backslash
+         followed by a continuation. A backslash followed by whitespace
+         before the newline is not a continuation, since the run never
+         reaches the newline. This pre-pass does not reach inside a
+         `<<<...>>>` block (literal or markdown) - block interiors are
+         exempt and a trailing backslash there is kept exactly as written.
+         A continuation with no following physical line (end of file), or
+         whose following physical line is itself a block_start or
+         block_end marker, is left dangling: its floor(N/2) literal
+         backslashes are kept and nothing is joined, so a continuation can
+         never swallow a block marker. Continuation only removes the
+         newline - it does not change any other syntax, so e.g. a
+         parameter_list split across continued lines still needs its `,`
+         separators between parameters.
+
+      39. The escape prefix `\?` is RESERVED for a future extended-escape
+         family and raises an error wherever Poetic's own escape decoding
+         applies - escaped_char in text_with_markup (poem segments and
+         labels), and the equivalent unquoted/double-quoted backslash
+         handling in parameter_value (see constraint 33). It is not a
+         valid escaped_char production. Write `\\?` for a literal
+         backslash followed by `?`: the escaped backslash decodes to `\`
+         as usual, and the `?` is then an ordinary character, not part of
+         an escape. This reservation does not apply inside raw
+         `<<<...>>>` blocks or the Markdown analysis/postscript sections,
+         which have their own escaping.
+
+      40. A directive_line may be declared in the preamble (see
+         preamble_item) as well as in the metadata_section. Scanning the
+         preamble for directives stops at the first line that is neither
+         blank nor a directive_line - that line begins the header
+         (title_line). When directives are declared in both places, they
+         are collected into a single, file-wide `directives` list in
+         source order: every directive declared in the preamble precedes
+         every directive declared in the metadata_section. As per
+         constraint 36, directives are NOT de-duplicated across the two
+         sites either - each directive_line, wherever it appears, becomes
+         its own entry.
+
+      41. `\%` decodes to a literal `%` wherever escaped_char applies (poem
+         segments and labels, per constraint 6), and additionally in
+         title_line specifically, even though title_line does not
+         otherwise go through text_with_markup - this lets a title begin
+         with a literal `%` without its line being read as a preamble
+         directive_line (a bare `%...` line, unescaped, opens a
+         directive_line instead). The one exception is the sequence
+         `\%{`: it is left completely untouched by escaped_char decoding,
+         because `\%{name}` is context_variable_substitution's literal-
+         escape alternative, decoded later, at the render stage, by
+         substituteContextVars - decoding the leading `\%` here would
+         destroy the backslash that later stage depends on. This carve-out
+         applies equally in title_line.
 *)
 
 (* ============================================================================
