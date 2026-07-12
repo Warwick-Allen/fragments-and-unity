@@ -1,6 +1,6 @@
 # Fragments & Unity — Poems by Warwick Allen
 
-Personal poem collection built with the [poetic](https://github.com/warwickallen/poetic) framework.
+Personal poem collection built with the [poetic](https://github.com/Poetic-Poems/poetic) framework.
 Published at <https://warwick-allen.github.io/fragments-and-unity/> and Blogger.
 
 This VS Code workspace has two roots: this repo (poems) and `../Code/poetic` (the framework).
