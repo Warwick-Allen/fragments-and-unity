@@ -143,12 +143,18 @@ class PoemParser {
       // Fold a (possibly multi-line) chain of continuations into `line`.
       while (true) {
         // Trailing backslash run, tolerating a CR from CRLF-terminated input.
-        const m = line.match(/(\\+)(\r?)$/);
-        if (m === null) break;
+        // Scanned by hand rather than with /(\\+)(\r?)$/: that pattern is
+        // vulnerable to polynomial backtracking (CodeQL js/polynomial-redos)
+        // on a long backslash run not actually anchored at the string end.
+        let end = line.length;
+        const cr = line.endsWith('\r') ? '\r' : '';
+        end -= cr.length;
+        let start = end;
+        while (start > 0 && line[start - 1] === '\\') start--;
+        const run = end - start;
+        if (run === 0) break;
 
-        const run = m[1].length;
-        const cr = m[2];
-        const head = line.slice(0, line.length - m[0].length);
+        const head = line.slice(0, start);
         const literal = head + '\\'.repeat(Math.floor(run / 2));
 
         if (run % 2 === 0) { line = literal + cr; break; } // even: newline kept
@@ -1183,6 +1189,61 @@ class PoemParser {
   }
 
   /**
+   * Match a single audio (song-service) line: a service name, either bare
+   * ("Audiomack") or with a value ("Suno: s/xyz"), plus an optional trailing
+   * param list ("Mega: id#key (video, ratio=21:9)"). The trailing " (...)"
+   * group is only recognised when preceded by whitespace and the line ends
+   * with ")", so a "(" embedded in a value (no preceding whitespace) stays
+   * part of the value.
+   *
+   * Hand-scanned rather than matched with a single regex: a lazy value
+   * capture immediately followed by an optional "(...)" group is vulnerable
+   * to polynomial backtracking (CodeQL js/polynomial-redos) once both can
+   * grow across the same input — see CHANGELOG.md.
+   *
+   * @param {string} trimmed - the already-trimmed, variable-substituted line
+   * @returns {{key: string, rawValue: (string|undefined), paramStr: (string|undefined)}|null}
+   */
+  matchAudioLine(trimmed) {
+    const idMatch = trimmed.match(/^[A-Za-z][\w-]*/);
+    if (!idMatch) {
+      return null;
+    }
+    const key = idMatch[0].toLowerCase();
+    let pos = idMatch[0].length;
+    while (pos < trimmed.length && /\s/.test(trimmed[pos])) pos++;
+
+    // Trailing " (...)" param list: the first whitespace-preceded "(" at or
+    // after `pos`, provided the line actually ends with ")".
+    let paramStr;
+    let valueEnd = trimmed.length;
+    if (trimmed.endsWith(')')) {
+      for (let i = pos; i < trimmed.length; i++) {
+        if (trimmed[i] === '(' && /\s/.test(trimmed[i - 1])) {
+          let wsStart = i;
+          while (wsStart > pos && /\s/.test(trimmed[wsStart - 1])) wsStart--;
+          paramStr = trimmed.slice(i);
+          valueEnd = wsStart;
+          break;
+        }
+      }
+    }
+
+    let rawValue;
+    if (trimmed[pos] === ':') {
+      pos++;
+      while (pos < valueEnd && /\s/.test(trimmed[pos])) pos++;
+      rawValue = trimmed.slice(pos, valueEnd);
+    } else if (pos !== valueEnd) {
+      // Trailing content after the identifier that is neither a ": value"
+      // nor a recognised param list — not a service line.
+      return null;
+    }
+
+    return { key, rawValue, paramStr };
+  }
+
+  /**
    * Parse audio section
    */
   parseAudio() {
@@ -1206,18 +1267,13 @@ class PoemParser {
       // ("Suno: s/xyz", "YouTube: dQw4…"), plus an optional trailing param list
       // ("Mega: id#key (video, ratio=21:9)"). The service becomes a lower-cased
       // key; a song handler (builtin or from .poetic-config.yaml) renders it
-      // later. The trailing " (...)" group is matched separately so it is not
-      // swallowed into the value (song values contain no whitespace-preceded
-      // "(", so a whitespace-preceded group is unambiguous). Anything that is
-      // not a service line stops the audio section, matching the behaviour for
-      // stray prose before a missing ==== marker.
-      const m = trimmed.match(/^([A-Za-z][\w-]*)\s*(?::\s*(.*?))?(?:\s+(\(.*\)))?$/);
+      // later. Anything that is not a service line stops the audio section,
+      // matching the behaviour for stray prose before a missing ==== marker.
+      const m = this.matchAudioLine(trimmed);
       if (!m) {
         break;
       }
-      const key = m[1].toLowerCase();
-      const rawValue = m[2];   // undefined for a bare service line
-      const paramStr = m[3];   // undefined when there is no trailing param list
+      const { key, rawValue, paramStr } = m;
 
       if (paramStr === undefined) {
         if (rawValue === undefined) {
@@ -1521,6 +1577,22 @@ class PoemParser {
   }
 
   /**
+   * Consume the optional trailing `#comment` (which requires at least one
+   * whitespace character before the `#`) and any trailing whitespace, from
+   * `start` to end of `line`. Returns `true` if the remainder of the line is
+   * exhausted this way, `false` if unconsumed non-whitespace content remains.
+   * Shared by parseDirectiveLine() and matchLabelLine(), whose PCRE
+   * equivalents both end in `(\s+#.*)?\s*$`.
+   */
+  matchesTrailingComment(line, start) {
+    const len = line.length;
+    let i = start;
+    while (i < len && /\s/.test(line[i])) i++;
+    if (i > start && line[i] === '#') return true;
+    return i === len;
+  }
+
+  /**
    * Recognise a directive line (`%name key:value ...`, with an optional trailing
    * `# comment`) and build its structured form. Returns `{ name, attributes? }`
    * — where `attributes` maps each `key:value` token (split on its first `:`)
@@ -1530,24 +1602,51 @@ class PoemParser {
    * Shared by the Metadata section (parseMetadata) and the Preamble pre-pass
    * (extractPreambleDirectives), so a directive parses identically wherever it
    * is declared.
+   *
+   * Scanned by hand rather than with
+   * /^\s*%([\w.-]+)((?:\s+[\w.]+:[\w.-]+)*)(\s+#.*)?\s*$/i: CodeQL
+   * (js/polynomial-redos) flags that pattern's repeated `key:value` group as
+   * vulnerable to polynomial backtracking on adversarial input.
    */
   parseDirectiveLine(line) {
-    const directiveRe = /^\s*%([\w.-]+)((?:\s+[\w.]+:[\w.-]+)*)(\s+#.*)?\s*$/i;
-    const m = line.match(directiveRe);
-    if (!m) return null;
+    const len = line.length;
+    let i = 0;
+    while (i < len && /\s/.test(line[i])) i++;
+    if (line[i] !== '%') return null;
+    i++;
 
-    const directive = { name: m[1] };
-    const attrsRaw = m[2] ? m[2].trim() : '';
-    if (attrsRaw !== '') {
-      const attributes = {};
-      for (const token of attrsRaw.split(/\s+/)) {
-        const colonIndex = token.indexOf(':');
-        const key = token.slice(0, colonIndex);
-        const value = token.slice(colonIndex + 1);
-        attributes[key] = value;
-      }
-      directive.attributes = attributes;
+    const nameStart = i;
+    while (i < len && /[\w.-]/.test(line[i])) i++;
+    if (i === nameStart) return null;
+    const name = line.slice(nameStart, i);
+
+    const attributes = {};
+    let hasAttributes = false;
+
+    while (true) {
+      let j = i;
+      while (j < len && /\s/.test(line[j])) j++;
+      if (j === i) break;
+
+      const keyStart = j;
+      while (j < len && /[\w.]/.test(line[j])) j++;
+      if (j === keyStart || line[j] !== ':') break;
+      const key = line.slice(keyStart, j);
+      j++;
+
+      const valueStart = j;
+      while (j < len && /[\w.-]/.test(line[j])) j++;
+      if (j === valueStart) break;
+
+      attributes[key] = line.slice(valueStart, j);
+      hasAttributes = true;
+      i = j;
     }
+
+    if (!this.matchesTrailingComment(line, i)) return null;
+
+    const directive = { name };
+    if (hasAttributes) directive.attributes = attributes;
     return directive;
   }
 
@@ -1558,6 +1657,32 @@ class PoemParser {
   pushDirective(directive) {
     if (!this.result.directives) this.result.directives = [];
     this.result.directives.push(directive);
+  }
+
+  /**
+   * Recognise a label line (`#label`, with an optional trailing `# comment`)
+   * and return the label text, or `null` when `line` is not a label.
+   *
+   * Scanned by hand rather than with
+   * /^\s*#([^&<>\\#\s]+?)(\s+#.*)?\s*$/i: CodeQL (js/polynomial-redos) flags
+   * that pattern's lazy label capture as vulnerable to polynomial
+   * backtracking on adversarial input.
+   */
+  matchLabelLine(line) {
+    const len = line.length;
+    let i = 0;
+    while (i < len && /\s/.test(line[i])) i++;
+    if (line[i] !== '#') return null;
+    i++;
+
+    const labelStart = i;
+    while (i < len && !/[\s&<>\\#]/.test(line[i])) i++;
+    if (i === labelStart) return null;
+    const label = line.slice(labelStart, i);
+
+    if (!this.matchesTrailingComment(line, i)) return null;
+
+    return label;
   }
 
   /**
@@ -1577,7 +1702,6 @@ class PoemParser {
   parseMetadata() {
     this.skipBlankLines();
 
-    const labelRe = /^\s*#([^&<>\\#\s]+?)(\s+#.*)?\s*$/i;
     const seenLabels = new Set();
 
     while (true) {
@@ -1606,9 +1730,8 @@ class PoemParser {
         continue;
       }
 
-      const labelMatch = line.match(labelRe);
-      if (labelMatch) {
-        const label = labelMatch[1];
+      const label = this.matchLabelLine(line);
+      if (label !== null) {
         if (!seenLabels.has(label)) {
           seenLabels.add(label);
           if (!this.result.labels) {
@@ -1628,17 +1751,32 @@ class PoemParser {
   }
 
   /**
+   * `\?` is reserved for a future extended-escape family (see
+   * docs/POEM-SYNTAX.md) and is an error until it is implemented. Only an
+   * ODD backslash run before `?` triggers it; `\\?` (even) is a literal `\`
+   * then `?`, decoded by the escape table in convertMarkup().
+   *
+   * Scanned by hand rather than with /(\\+)\?/g: that pattern is unanchored,
+   * so CodeQL (js/polynomial-redos) flags it as vulnerable to polynomial
+   * backtracking on a long backslash run not followed by `?` anywhere (same
+   * root cause as joinContinuedLines(), above).
+   */
+  checkReservedEscape(text) {
+    for (let searchIndex = 0; ;) {
+      const qIndex = text.indexOf('?', searchIndex);
+      if (qIndex === -1) break;
+      let runStart = qIndex;
+      while (runStart > 0 && text[runStart - 1] === '\\') runStart--;
+      if ((qIndex - runStart) % 2 === 1) throw this.reservedEscapeError();
+      searchIndex = qIndex + 1;
+    }
+  }
+
+  /**
    * Convert inline markup to HTML
    */
   convertMarkup(text) {
-    // `\?` is reserved for a future extended-escape family (see
-    // docs/POEM-SYNTAX.md) and is an error until it is implemented. Only an
-    // ODD backslash run before `?`
-    // triggers it; `\\?` (even) is a literal `\` then `?`, decoded by the escape
-    // table below.
-    for (const m of text.matchAll(/(\\+)\?/g)) {
-      if (m[1].length % 2 === 1) throw this.reservedEscapeError();
-    }
+    this.checkReservedEscape(text);
 
     // Process escapes first. The escape class also decodes `\%` → `%`, but NOT
     // `\%{`: `\%{name}` is the render-time context-variable literal escape and
