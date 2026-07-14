@@ -49,21 +49,20 @@
  *   substituteTemplate(template, scope)      - low-level {token} expansion
  */
 
-const fs = require('fs');
-const path = require('path');
-const yaml = require('js-yaml');
+const BUILTIN_HANDLERS = require('./song-handlers-data');
 
-const BUILTIN_HANDLERS_PATH = path.join(__dirname, '..', 'song-handlers.yaml');
-
-/** Read the framework's builtin handler definitions. */
+/**
+ * Read the framework's builtin handler definitions.
+ *
+ * Returns a deep clone so callers and the merge in loadSongHandlers() can never
+ * mutate the shared module data. The builtins are authored in
+ * src/song-handlers.yaml and emitted to ./song-handlers-data.js (a plain,
+ * fs-free data module) by build-song-handlers-data.js — so this module, and the
+ * browser renderer that depends on it (src/browser/render.js), stay
+ * filesystem-free. Do NOT reintroduce `fs`/`path`/`__dirname` here.
+ */
 function loadBuiltinHandlers() {
-  try {
-    const parsed = yaml.load(fs.readFileSync(BUILTIN_HANDLERS_PATH, 'utf8'));
-    return (parsed && typeof parsed === 'object') ? parsed : {};
-  } catch (err) {
-    console.error(`Error reading builtin song handlers (${BUILTIN_HANDLERS_PATH}): ${err.message}`);
-    return {};
-  }
+  return JSON.parse(JSON.stringify(BUILTIN_HANDLERS));
 }
 
 /** True for a non-null, non-array object (a "plain" mergeable map). */
@@ -77,9 +76,18 @@ function isPlainObject(v) {
  * value wholesale; a `null` source value deletes the target key. Nested plain
  * objects on the source are cloned rather than shared, so the builtin
  * definitions are never mutated by a consumer override.
+ *
+ * `__proto__`/`constructor`/`prototype` keys are skipped outright via direct
+ * `===` comparisons rather than a `Set`/array lookup: `source` ultimately
+ * comes from consumer-authored YAML (`song_handlers:` in .poetic-config.yaml),
+ * so an untrusted or malformed config must not be able to reach
+ * `Object.prototype` (CodeQL js/prototype-pollution-utility) — and CodeQL's
+ * guard recognition for that query only treats an inline equality test against
+ * the literal key as a sanitizing barrier, not an indirect membership check.
  */
 function deepMerge(target, source) {
   for (const [key, value] of Object.entries(source)) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
     if (value === null) {
       delete target[key];
     } else if (isPlainObject(value)) {
@@ -98,7 +106,10 @@ function deepMerge(target, source) {
  * scalar keys are overridden, nested maps (e.g. `media_sizes`) merge key-by-key,
  * and a `null` value deletes a key (or, at the top level, the whole handler).
  * This lets a consumer retune just one size profile without redeclaring the
- * handler's `embed_url`.
+ * handler's `embed_url`. A handler name of `__proto__`/`constructor`/`prototype`
+ * is skipped via the same direct equality check as `deepMerge` (see above)
+ * rather than merged, since `handlers[key]` would otherwise resolve to
+ * `Object.prototype` itself.
  *
  * @param {object} [config] - parsed .poetic-config.yaml
  * @returns {Object<string, object>} handler map keyed by lower-case service name
@@ -109,6 +120,7 @@ function loadSongHandlers(config = {}) {
     if (!isPlainObject(source)) return;
     for (const [name, def] of Object.entries(source)) {
       const key = String(name).toLowerCase();
+      if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
       if (def === null) { delete handlers[key]; continue; }
       if (!isPlainObject(def)) continue;
       if (!isPlainObject(handlers[key])) handlers[key] = {};
@@ -398,5 +410,4 @@ module.exports = {
   resolveSongs,
   hasResolvableSongs,
   substituteTemplate,
-  BUILTIN_HANDLERS_PATH,
 };
