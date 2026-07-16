@@ -949,26 +949,48 @@ h2.poem-title {
 .toc-table th {
   background: #f8f9fa;
   color: #333;
-  cursor: pointer;
   font-weight: 600;
+  padding: 0;
   user-select: none;
 }
 
-.toc-table th:hover {
+/* The sort <button> fills the whole <th> so the clickable/keyboard-focusable
+   area matches the previous whole-header onclick target exactly (no visual
+   or interaction regression for mouse users). */
+.toc-table th .sort-button {
+  background: none;
+  border: none;
+  box-sizing: border-box;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  font: inherit;
+  padding: 12px;
+  text-align: left;
+  width: 100%;
+}
+
+.toc-table th .sort-button:hover {
   background: #e9ecef;
 }
 
-.toc-table th.sortable::after {
+.toc-table th .sort-button:focus-visible {
+  outline: 2px solid #007AFF;
+  outline-offset: -2px;
+}
+
+.toc-table th.sortable .sort-button::after {
   content: " ↕";
   opacity: 0.5;
 }
 
-.toc-table th.sort-asc::after {
+.toc-table th.sort-asc .sort-button::after {
   content: " ↑";
   opacity: 1;
 }
 
-.toc-table th.sort-desc::after {
+.toc-table th.sort-desc .sort-button::after {
   content: " ↓";
   opacity: 1;
 }
@@ -1199,7 +1221,10 @@ div.analysis {
   font-style: italic;
 }
 
-/* Embedded song players (lazy-loaded) and song links */
+/* Embedded song players (lazy-loaded) and song links.
+   Service-agnostic base classes below; per-service tweaks use the
+   .song-embed--<service> / .song-item--<service> modifiers. Consumers style
+   their own handlers the same way in custom.css. */
 
 .song-embed-btn {
   background: #001833;
@@ -1233,14 +1258,57 @@ div.analysis {
 .song-embed-player iframe {
   width: 100%;
   border: 0;
+  /* Player height is set per song at build time via the --song-embed-height
+     custom property on .song-embed-player (see song-handlers.js /
+     docs/BUILD.md). 252px is the framework fallback when a handler declares no
+     size. A consumer can still hard-override a single service with a
+     .song-embed--<service> .song-embed-player iframe rule in custom.css. */
+  height: var(--song-embed-height, 252px);
 }
 
-.song-embed--audiomack .song-embed-player iframe {
-  height: 252px;
+/* Aspect-ratio players (e.g. MEGA video) size to a fixed ratio rather than a
+   fixed height. The --aspect modifier class and the --song-embed-aspect-ratio
+   custom property are emitted together at build time. */
+.song-embed-player--aspect iframe {
+  height: auto;
+  aspect-ratio: var(--song-embed-aspect-ratio);
 }
 
-.song-item--suno .song-link-anchor::before { content: "("; }
-.song-item--suno .song-link-anchor::after  { content: ")"; }
+/* Parentheses around link-type song items are decorative — CSS, not markup — so a
+   consumer can remove them by overriding `content` in custom.css. The generic
+   .song-item-link wrapper brackets every link handler (not just suno); pair with
+   .song-item--<service> for per-service overrides. Placing them on the wrapper
+   div keeps the parentheses outside the <a>, so they are not part of the link. */
+div.song-item-link::before { content: "("; }
+div.song-item-link::after  { content: ")"; }
+
+/* Footer (public/poetic-footer.html injected by the build; see docs/BUILD.md) */
+.poetic-footer {
+  border-top: 1px solid #eee;
+  color: #999;
+  font-size: 0.85em;
+  margin-top: 40px;
+  padding-top: 20px;
+  text-align: center;
+}
+
+.poetic-footer-link {
+  align-items: center;
+  color: inherit;
+  display: inline-flex;
+  gap: 6px;
+  text-decoration: none;
+}
+
+.poetic-footer-link:hover {
+  text-decoration: underline;
+}
+
+.poetic-footer-logo {
+  height: 1.2em;
+  vertical-align: middle;
+  width: auto;
+}
 
 /* Dark mode support using .dark-mode class (for Blogger JavaScript workaround) */
 html.dark-mode {
@@ -1414,6 +1482,11 @@ html.dark-mode .poem-card-label:focus-visible {
   background: #26313b;
 }
 
+html.dark-mode .poetic-footer {
+  border-color: #23303a;
+  color: #9aa6b2;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #22262b;
@@ -1577,6 +1650,11 @@ html.dark-mode .poem-card-label:focus-visible {
   .poem-card-label:hover,
   .poem-card-label:focus-visible {
     background: #26313b;
+  }
+
+  .poetic-footer {
+    border-color: var(--border);
+    color: var(--muted);
   }
 }
 
@@ -2980,9 +3058,11 @@ head.appendChild(script);
   <!-- ~~ CUSTOM JS START ~~ -->
 
 <script type='text/javascript'>//<![CDATA[
-// Shared lazy-loader for embedded song players (mirrors public/poetic.js).
-// A single delegated click handler; the embed URL is baked into data-embed-src
-// at build time, so this stays provider-agnostic and nothing loads until click.
+// Shared lazy-loader for embedded song players — framework-owned, do not hand-edit.
+// A single delegated click handler that works for any embed (Audiomack, YouTube,
+// Spotify, …) on any page. The embed URL is resolved at build time into
+// data-embed-src, so this stays provider-agnostic and no third-party iframe loads
+// until the visitor clicks. Player dimensions come from CSS (.song-embed-player).
 document.addEventListener('click', function (e) {
   const btn = e.target.closest('.song-embed-btn');
   if (!btn) return;
@@ -2996,6 +3076,19 @@ document.addEventListener('click', function (e) {
   iframe.setAttribute('scrolling', 'no');
   iframe.setAttribute('frameborder', '0');
   iframe.setAttribute('loading', 'lazy');
+  // Grant the capabilities a media player needs (harmless for services that
+  // don't use them; required for MEGA's fullscreen / picture-in-picture). A
+  // handler can narrow or widen this via embed_allow / embed_allowfullscreen
+  // (see src/song-handlers.yaml), surfaced here as data-allow /
+  // data-allow-fullscreen on the button; absent, this global default applies.
+  const allow = btn.dataset.allow != null
+    ? btn.dataset.allow
+    : 'autoplay; fullscreen; picture-in-picture; encrypted-media';
+  iframe.setAttribute('allow', allow);
+  const allowFullscreen = btn.dataset.allowFullscreen != null
+    ? btn.dataset.allowFullscreen === 'true'
+    : true;
+  if (allowFullscreen) iframe.setAttribute('allowfullscreen', '');
   iframe.title = btn.dataset.title || '';
   player.classList.remove('hidden'); player.appendChild(iframe);
 });
