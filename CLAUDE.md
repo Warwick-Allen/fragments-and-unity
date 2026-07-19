@@ -101,6 +101,33 @@ Pages. Keys are grouped hierarchically (e.g. `blogger.sync`, `auto_sync.schedule
 `examples/poetic-config.example.yaml` in the poetic framework repo for a fully-commented
 reference of every option, and `docs/BUILD.md` for full details.
 
+## Branch workflow
+
+`main` is protected: it does not accept direct commits or pushes. Every change goes through
+a pull request, which the repo owner reviews and merges. Write PR titles in Conventional
+Commits format (e.g. `docs: add branch workflow section`), matching the repo's commit history.
+
+All Poetic repositories, this one included, operate in a multi-agent environment: autonomous
+and interactive agents, and the maintainer, may push branches, merge pull requests, and move
+`main` at any time. Before commencing any changes, make your own dedicated shallow clone of
+`origin/main` and work in that — never in a checkout shared with anyone else, such as the
+user's working copy (which may be edited at any moment) or a clone another agent is already
+using:
+
+```bash
+git clone --depth 1 https://github.com/Warwick-Allen/fragments-and-unity.git <scratch-dir>/fragments-and-unity
+```
+
+Deepen the clone if the task turns out to need history — for example, a rebase onto a `main`
+that has moved needs the merge base (`git fetch --unshallow`, or `git fetch --depth=<n>`).
+Commit, push the feature branch, and open the pull request from that clone; delete the clone
+once the work has landed.
+
+When you open (or update) a pull request, do not assume `origin/main` is still in the state
+it was when you cloned — another change may have merged meanwhile. Confirm the PR is actually
+mergeable via `gh` (e.g. `gh pr view <n> --json mergeable,mergeStateStatus`); if it conflicts,
+rebase onto the current `main` and push the fix.
+
 ## Tech debt
 
 When you defer work, take a shortcut, or notice a known gap, record it in `TECH-DEBT.md`
