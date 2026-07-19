@@ -115,6 +115,12 @@ CI, deployment). If you add an entry and refer to it elsewhere (e.g., in code co
 that cross-reference in the entry itself, so whoever resolves it knows to also remove those
 references.
 
+`TECH-DEBT.md` ends with a permanent Ledger table recording every ID ever allocated, so a
+removed entry's ID is never reused. Get a new entry's ID from `scripts/next-tech-debt-id.pl`
+rather than counting by hand; add the entry's body under the `## Current Items` heading as a
+`### <id> <title>` section, and add a Ledger row (`open`) alongside it. When picking up an
+existing open item, follow the "Claiming an item" workflow at the top of `TECH-DEBT.md`.
+
 ## Documentation principles
 
 `CHANGELOG.md` (repo root) is the place to record what changed and when. Add an `[Unreleased]`
