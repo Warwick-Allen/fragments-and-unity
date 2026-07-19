@@ -85,8 +85,11 @@ function applyContextVars(value, ctx) {
  *
  *   *word* / _word_     -> <em>word</em>
  *   **word** / __word__ -> <strong>word</strong>
- *   ~word~              -> <s>word</s>
+ *   ~~word~~            -> <s>word</s>
  *   \* \_ \~ \\         -> literal * _ ~ \
+ *
+ * A single `~` is never itself markup: it is plain literal text, deliberately
+ * left unassigned and reserved for a possible future subscript syntax.
  *
  * No dashes, smart quotes, entity expansion, links, spans, raw HTML, or `\%`/
  * `\?` handling (the `\%` decode already happened once, in the parser). The only
@@ -95,8 +98,8 @@ function applyContextVars(value, ctx) {
  * Security keystone: `&`, `<`, `>` are HTML-escaped BEFORE any tag is emitted, so
  * no `<`/`>`/`&` from the source — or from a substituted variable value — can
  * ever produce a live tag. Because of this, callers may interpolate the result
- * unescaped (Pug `!=`). Pass the FULLY-SUBSTITUTED plain title (see §5.3 of
- * docs/design/title-inline-markup.md).
+ * unescaped (Pug `!=`). Pass the FULLY-SUBSTITUTED plain title, so a variable
+ * value that happens to contain markup chars is escaped, never rendered as a tag.
  */
 function renderTitleMarkup(text) {
   if (text == null) return '';
@@ -118,7 +121,7 @@ function renderTitleMarkup(text) {
   // 3. Apply the three inline transforms, in the same order and with the same
   //    tokenisation as convertMarkup (strong before emphasis), so nesting
   //    degrades identically to body text (§11 Q3).
-  out = out.replace(/~([^~]+)~/g, '<s>$1</s>'); // Strikethrough
+  out = out.replace(/~~([^~]+)~~/g, '<s>$1</s>'); // Strikethrough
   out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>'); // Strong
   out = out.replace(/__([^_]+)__/g, '<strong>$1</strong>'); // Strong (underscore)
   out = out.replace(/\*([^*]+)\*/g, '<em>$1</em>'); // Emphasis

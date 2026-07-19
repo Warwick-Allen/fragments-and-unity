@@ -80,7 +80,7 @@ The header appears at the beginning of the file and consists of:
 
 ### Fields
 
-- **Title** (mandatory): The title of the poem (any text, may include variable references). Titles support a **restricted** inline-markup subset in the visible heading: emphasis (`*word*` or `_word_` → *word*), strong (`**word**` or `__word__` → **word**), and strikethrough (`~word~`). These are the *only* markup forms honoured — no links, spans, smart quotes, dashes, or entities — and the plain title (without markup) is still used everywhere else (`<title>`, slugs, Open Graph, attributes, `%{title}`). To show a literal `*`, `_`, `~`, or `\` in a title, escape it: `\*` `\_` `\~` `\\`. A title that must start with a literal `%` is written `\%…` (see [Escaped Characters](#escaped-characters)) — a bare `%…` line at the top of the file is otherwise read as a Preamble directive
+- **Title** (mandatory): The title of the poem (any text, may include variable references). Titles support a **restricted** inline-markup subset wherever the title is shown as a visible heading — the single-poem page, the index grid, and the all-poems listing: emphasis (`*word*` or `_word_` → *word*), strong (`**word**` or `__word__` → **word**), and strikethrough (`~~word~~`). These are the *only* markup forms honoured — no links, spans, smart quotes, dashes, or entities — and the plain title (without markup) is still used everywhere else (`<title>`, slugs, Open Graph, attributes, `%{title}`, search filtering). To show a literal `*`, `_`, `~`, or `\` in a title, escape it: `\*` `\_` `\~` `\\`. A title that must start with a literal `%` is written `\%…` (see [Escaped Characters](#escaped-characters)) — a bare `%…` line at the top of the file is otherwise read as a Preamble directive
 - **Author** (optional): The author's name. If omitted, defaults to `${author}` which will be expanded if the variable is defined, or left as the literal text `${author}` if not (may include variable references)
 - **Date** (mandatory): Must be in format `YYYY-MM-DD` (e.g., `1970-01-01`) after variable substitution
 
@@ -861,7 +861,10 @@ same thing everywhere.
 |--------|--------|
 | `*text*` or `_text_` | `<em>text</em>` (italic) |
 | `**text**` or `__text__` | `<strong>text</strong>` (bold) |
-| `~text~` | `<s>text</s>` (strikethrough; in Markdown sections use `~~text~~`) |
+| `~~text~~` | `<s>text</s>` (strikethrough) |
+
+A single `~` is never itself markup: it is plain literal text, deliberately
+left unassigned and reserved for a possible future subscript syntax.
 
 ### Links
 
@@ -987,7 +990,7 @@ when the extended-escape family is designed and implemented.
 
    The **title** does not go through this full dialect. It instead supports a
    restricted subset — emphasis (`*…*` / `_…_`), strong (`**…**` / `__…__`) and
-   strikethrough (`~…~`) only, with `\* \_ \~ \\` escapes — rendered escape-first
+   strikethrough (`~~…~~`) only, with `\* \_ \~ \\` escapes — rendered escape-first
    for the visible heading; it has no links, spans, smart quotes, dashes or
    entity expansion (see [Title (mandatory)](#fields)). It also honours the
    single `\%` → `%` escape (see [Escaped Characters](#escaped-characters)), so
