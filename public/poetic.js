@@ -33,9 +33,51 @@ document.addEventListener('click', function (e) {
   player.classList.remove('hidden'); player.appendChild(iframe);
 });
 
-// Postscript "See more" preview — the CSS checkbox hack handles expand/collapse
-// without JS; this just suppresses the toggle when truncation would hide <= 1 line,
-// which depends on rendered layout and so can only be decided at runtime.
+// Postscript "See more" preview — a real <button aria-expanded> (see
+// _poem-content.pug) toggles expand/collapse; CSS keys off aria-expanded via an
+// attribute selector, mirroring how the sort headers in all-poems.js keep
+// aria-sort in sync with their visual state.
+document.addEventListener('click', function (e) {
+  const toggle = e.target.closest('.postscript-toggle');
+  if (!toggle) return;
+  const content = document.getElementById(toggle.getAttribute('aria-controls'));
+  if (!content) return;
+  const expanded = toggle.getAttribute('aria-expanded') === 'true';
+  toggle.setAttribute('aria-expanded', String(!expanded));
+  content.classList.toggle('postscript-expanded', !expanded);
+  const label = toggle.querySelector('.sr-only');
+  if (label) label.textContent = expanded ? 'See more' : 'See less';
+});
+
+// Analysis show/hide + synopsis/full selector — delegated click handler mirroring
+// the postscript-toggle pattern above: aria-expanded/aria-pressed/data-* attributes
+// carry the state, and poetic.css keys visibility off them via attribute selectors,
+// so this stays the only script involved (see _poem-content.pug's "do not add a
+// script block here" comment).
+document.addEventListener('click', function (e) {
+  const show = e.target.closest('.analysis.show');
+  if (show) {
+    show.setAttribute('aria-expanded', 'true');
+    return;
+  }
+  const hide = e.target.closest('.analysis.hide');
+  if (hide) {
+    const showBtn = document.getElementById(hide.dataset.analysisToggle);
+    if (showBtn) showBtn.setAttribute('aria-expanded', 'false');
+    return;
+  }
+  const select = e.target.closest('.analysis.selector');
+  if (!select) return;
+  const group = select.closest('.full-or-synopsis-selector');
+  if (!group) return;
+  group.setAttribute('data-selected', select.dataset.analysisSelect);
+  group.querySelectorAll('.analysis.selector').forEach(function (btn) {
+    btn.setAttribute('aria-pressed', String(btn === select));
+  });
+});
+
+// Suppresses the toggle when truncation would hide <= 1 line, which depends on
+// rendered layout and so can only be decided at runtime.
 function evaluatePostscriptPreview(el) {
   const previewLines = parseFloat(el.dataset.previewLines) || 5;
   const style = getComputedStyle(el);

@@ -41,7 +41,7 @@ scripts/edit-poem ^at           # open any poem whose filename starts with "at"
 | Code | Meaning |
 |---|---|
 | `0` | Poem opened (build triggered automatically if the file was modified) |
-| `-1` | No poems matched PATTERN |
+| `255` | No poems matched PATTERN |
 | `N > 1` | N poems matched (ambiguous); titles listed to stderr; no file opened |
 
 ### Notes
@@ -191,6 +191,11 @@ With `--commit`, this happens automatically once the sync completes, and the
 commit body records which upstream commits were pulled in. Either way, the
 summary is printed to the terminal so you can see it before deciding.
 
+`package.json` and `package-lock.json` are framework-owned paths, so a sync
+overwrites them wholesale. If this repo has custom `package.json` edits (extra
+dependencies, scripts, etc.), review the staged diff carefully before
+committing — the sync does not merge your edits, it replaces the files.
+
 ### Skipping paths
 
 To keep a local override of a framework file, add it to `.poetic-config.yaml`:
@@ -202,6 +207,15 @@ skip_paths:
 ```
 
 Each path is compared exactly against the framework path list.
+
+### Generated `public/*.js` artefacts
+
+Some framework-owned source files are also copied verbatim into `public/` at
+build time (e.g. `src/tools/date-utils.js` → `public/date-utils.js`, via
+`copyDateUtilsAsset()` in `build-all-poems.js`). Syncing the framework updates
+the source but not a consumer's already-committed copy of the generated
+artefact — that copy goes stale until the consumer runs `npm run build`
+again. Run a build after syncing if this repo tracks any such artefact.
 
 ### Notes on CI authentication
 

@@ -10,6 +10,17 @@
 
 const yaml = require('js-yaml');
 const { renderGfm } = require('./markdown');
+const { convertMarkup, convertSpacesToNbsp, reservedEscapeError } = require('./poem-markup');
+const {
+  checkReservedName,
+  substituteVariables: substituteVariablesPure,
+  expandVarAt,
+  expandStandaloneRefs,
+} = require('./poem-variables');
+const {
+  parseDirectiveLine: parseDirectiveLinePure,
+  matchLabelLine: matchLabelLinePure,
+} = require('./poem-metadata');
 
 /**
  * Parse a .poem file and convert to structured data
@@ -26,6 +37,8 @@ class PoemParser {
 
   /**
    * Main parse method
+   *
+   * @returns {object} the structured poem-data result
    */
   parse() {
     // Remove comment blocks first
@@ -179,21 +192,6 @@ class PoemParser {
   }
 
   /**
-   * The `\?` escape prefix is reserved for a future extended-escape family and
-   * is not yet implemented (see docs/POEM-SYNTAX.md). Until then it is a hard
-   * error wherever Poetic interprets its own escapes — the WYSIWYG poem body and
-   * labels (convertMarkup) and parameter values (scanShellWord). `\\?` (an
-   * escaped backslash, then a literal `?`) is the way to write a literal `\?`.
-   */
-  reservedEscapeError() {
-    return new Error(
-      "Reserved syntax: '\\?' is reserved but not yet implemented " +
-      "(the '\\?' escape prefix is reserved for a future extended-escape family; " +
-      "see docs/POEM-SYNTAX.md). Write '\\\\?' for a literal backslash then '?'."
-    );
-  }
-
-  /**
    * Strip the ignored trailing text after a line-anchored token (spec section
    * 10: "Any text after a line-anchored token on the same line is ignored").
    * Applies to dividers/end markers and version/segment/analysis labels; leaves
@@ -206,6 +204,9 @@ class PoemParser {
    * found later by the quote-aware scanner in parseParamList(). If the token is
    * NOT followed by `(` (after optional whitespace), trailing text is stripped
    * as before.
+   *
+   * @param {string} line
+   * @returns {string}
    */
   stripTrailingAfterToken(line) {
     let m;
@@ -229,6 +230,11 @@ class PoemParser {
    * `params` is the object returned by parseParamList(), or null when no
    * parameter list is present or it is malformed (existing "trailing text
    * ignored" behaviour then applies to whatever follows the closing brace(s)).
+   *
+   * @param {string} line
+   * @param {string} type - '{{' for version labels (2 braces) or '{' for
+   *   segment/postscript/analysis labels (1 brace)
+   * @returns {{label: string, params: (object|null)}}
    */
   parseLabelWithParams(line, type) {
     const trimmed = line.trim();
@@ -245,26 +251,6 @@ class PoemParser {
     const params = afterWs ? this.parseParamList(afterWs[1]) : null;
 
     return { label, params };
-  }
-
-  /**
-   * Expand a `${name}` reference found at `str[at]` (where `str[at] === '$'`
-   * and `str[at + 1] === '{'`). Looks for the next `}` anywhere later in `str`
-   * (variable names cannot contain `{`, `}`, `$`, `<`, `>`, so the first `}`
-   * closes the reference; a `:-default` fallback likewise cannot contain `}`).
-   * The isolated `${...}` token is handed to substituteVariables(), so nested
-   * references and the `:-default` fallback are resolved. Returns
-   * `{ text, nextIndex }` with the substituted (or, if undefined, literal) text
-   * and the index just past the closing `}`, or null if there is no `}` later
-   * in the string (in which case `$` is not treated as starting a `${...}`
-   * token, and is instead ordinary literal text - matching substituteVariables(),
-   * which likewise leaves an unterminated `${` untouched).
-   */
-  expandVarAt(str, at) {
-    const closeIdx = str.indexOf('}', at + 2);
-    if (closeIdx === -1) return null;
-    const token = str.slice(at, closeIdx + 1); // "${name}"
-    return { text: this.substituteVariables(token), nextIndex: closeIdx + 1 };
   }
 
   /**
@@ -298,6 +284,10 @@ class PoemParser {
    * not itself re-scanned for further `${...}` or list syntax (`,`/`)`), so
    * neither a fresh substitution opportunity nor a premature list terminator
    * can be manufactured by what an expansion's value happens to contain.
+   *
+   * @param {string} str
+   * @param {number} i - index to start scanning from
+   * @returns {{value: string, nextIndex: number}|null}
    */
   scanShellWord(str, i) {
     const n = str.length;
@@ -335,14 +325,14 @@ class PoemParser {
           if (i >= n) return null; // unterminated quote
           const dc = str[i];
           if (dc === '"') { i++; break; } // closing quote
-          if (dc === '\\' && str[i + 1] === '?') throw this.reservedEscapeError();
+          if (dc === '\\' && str[i + 1] === '?') throw reservedEscapeError();
           if (dc === '\\' && i + 1 < n && '"\\$`'.includes(str[i + 1])) {
             value += str[i + 1];
             i += 2;
             continue;
           }
           if (dc === '$' && str[i + 1] === '{') {
-            const expanded = this.expandVarAt(str, i);
+            const expanded = expandVarAt(str, i, this.variables, this.usedBeforeDefined);
             if (expanded) {
               value += expanded.text;
               i = expanded.nextIndex;
@@ -358,7 +348,7 @@ class PoemParser {
       if (c === '\\') {
         // Unquoted backslash-escape: literal next character, whatever it is.
         if (i + 1 < n) {
-          if (str[i + 1] === '?') throw this.reservedEscapeError();
+          if (str[i + 1] === '?') throw reservedEscapeError();
           value += str[i + 1];
           i += 2;
           continue;
@@ -372,7 +362,7 @@ class PoemParser {
       if (c === '$' && str[i + 1] === '{') {
         // Expanded inline (see the double-quoted branch above for why the
         // result is appended directly rather than substituted again).
-        const expanded = this.expandVarAt(str, i);
+        const expanded = expandVarAt(str, i, this.variables, this.usedBeforeDefined);
         if (expanded) {
           value += expanded.text;
           i = expanded.nextIndex;
@@ -418,6 +408,9 @@ class PoemParser {
    * so a `,`/`)` that is quoted or backslash-escaped in an unquoted context
    * is correctly treated as literal rather than as list syntax in either
    * role.
+   *
+   * @param {string} str
+   * @returns {object|null}
    */
   parseParamList(str) {
     if (str[0] !== '(') return null;
@@ -509,7 +502,7 @@ class PoemParser {
       if (singleLineMatch) {
         const varName = singleLineMatch[1];
         const varValue = singleLineMatch[2];
-        this.checkReservedName(varName);
+        checkReservedName(varName);
         // Store the value raw; nested ${...} are resolved lazily, at use.
         this.variables.set(varName, varValue);
         i++;
@@ -520,7 +513,7 @@ class PoemParser {
       const multiLineMatch = line.match(/^=\{([^}]+)\}<<=.*$/);
       if (multiLineMatch) {
         const varName = multiLineMatch[1];
-        this.checkReservedName(varName);
+        checkReservedName(varName);
         const contentLines = [];
         i++; // Move past the start line
 
@@ -554,141 +547,27 @@ class PoemParser {
     // point of use, by substituteVariables() during the structural parse. This
     // gives nested references late (dynamic) binding. Single-line and inline
     // references are left untouched here for that later resolution.
-    this.lines = this.expandStandaloneRefs(this.lines, []);
+    this.lines = expandStandaloneRefs(this.lines, [], this.variables);
   }
 
   /**
-   * Recursively expand standalone multi-line variable references (`${name}` on
-   * its own line) into the referenced variable's raw body lines. `stack` guards
-   * against reference cycles (a self-referential multi-line variable is left as
-   * a literal line with a warning rather than looping forever). Lines that are
-   * not standalone references to a multi-line variable are passed through
-   * unchanged.
-   */
-  expandStandaloneRefs(lines, stack) {
-    const out = [];
-    for (const line of lines) {
-      const m = line.trim().match(/^\$\{([^}]+)\}$/);
-      if (m) {
-        const name = m[1];
-        const value = this.variables.get(name);
-        if (Array.isArray(value)) {
-          if (stack.includes(name)) {
-            console.warn(`Warning: Variable reference cycle detected at '\${${name}}'; left unexpanded.`);
-            out.push(line);
-          } else {
-            out.push(...this.expandStandaloneRefs(value, stack.concat(name)));
-          }
-          continue;
-        }
-        // Single-line variable, undefined, or a `%{...}`-style token: leave the
-        // line for substituteVariables() (or the render stage) to handle.
-      }
-      out.push(line);
-    }
-    return out;
-  }
-
-  /**
-   * Throw if `name` uses the reserved eager/early-binding form (a leading `!`,
-   * e.g. `={!name}=`). The behaviour is reserved for a future release; parsing
-   * it now is an error rather than a silently-accepted ordinary name.
-   */
-  checkReservedName(name) {
-    if (name[0] === '!') {
-      throw new Error(
-        `Reserved syntax: eager/early-binding variable '={!${name.slice(1)}}=' ` +
-        `is reserved but not yet implemented (a leading '!' in a variable name is reserved).`
-      );
-    }
-  }
-
-  /**
-   * Substitute author `${...}` variable references in `text`.
+   * Substitute author `${...}` variable references in `text`, against this
+   * parser's own `this.variables`/`this.usedBeforeDefined` state. Delegates
+   * to the pure scanner in poem-variables.js — see its docstring for the
+   * substitution rules (nested/late binding, `:-default`, escaping, cycle
+   * detection, the reserved `${!name}` form).
    *
-   *   ${name}          - the variable's value (its last definition in the file).
-   *                      Nested ${...} inside that value are expanded
-   *                      recursively, at use (late/dynamic binding).
-   *   ${name:-default} - `default` when `name` is undefined.
-   *   \${...}          - a literal `${...}` (the leading backslash is consumed).
-   *
-   * A reference cycle resolves to the literal `${...}` and warns (no infinite
-   * loop). Context references (`%{...}`) are NOT touched here - they are left
-   * for the render stage. The reserved eager form `${!name}` throws.
+   * @param {string} text
+   * @returns {string}
    */
   substituteVariables(text) {
-    return this.expandVars(text, []);
-  }
-
-  /**
-   * Core scanner for substituteVariables(). Walks `text` left to right so that
-   * `\${...}` escaping is honoured exactly once; `stack` carries the chain of
-   * variables currently being expanded, for cycle detection.
-   */
-  expandVars(text, stack) {
-    let out = '';
-    let i = 0;
-    const n = text.length;
-    while (i < n) {
-      const c = text[i];
-      if (c === '\\' && text[i + 1] === '$' && text[i + 2] === '{') {
-        // Escaped reference: emit a literal "${"; the name and closing "}"
-        // that follow are ordinary characters and are copied verbatim.
-        out += '${';
-        i += 3;
-        continue;
-      }
-      if (c === '$' && text[i + 1] === '{') {
-        const close = text.indexOf('}', i + 2);
-        if (close === -1) { out += c; i++; continue; }
-        const inner = text.slice(i + 2, close);
-        i = close + 1;
-        out += inner === '' ? '${}' : this.resolveVar(inner, stack);
-        continue;
-      }
-      out += c;
-      i++;
-    }
-    return out;
-  }
-
-  /**
-   * Resolve the interior of one `${...}` reference (`inner` is the text between
-   * the braces): apply the `:-default` fallback, cycle detection, and recursive
-   * expansion of the resulting value.
-   */
-  resolveVar(inner, stack) {
-    if (inner[0] === '!') {
-      throw new Error(
-        `Reserved syntax: eager/early-binding reference '\${${inner}}' is reserved ` +
-        `but not yet implemented (a leading '!' in a variable name is reserved).`
-      );
-    }
-    let name = inner;
-    let fallback = null;
-    const sep = inner.indexOf(':-');
-    if (sep !== -1) {
-      name = inner.slice(0, sep);
-      fallback = inner.slice(sep + 2);
-    }
-    if (stack.includes(name)) {
-      console.warn(`Warning: Variable reference cycle detected at '\${${name}}'; left unexpanded.`);
-      return '${' + inner + '}';
-    }
-    if (this.variables.has(name)) {
-      let value = this.variables.get(name);
-      if (Array.isArray(value)) value = value.join('\n');
-      return this.expandVars(value, stack.concat(name));
-    }
-    if (fallback !== null) {
-      return this.expandVars(fallback, stack);
-    }
-    this.usedBeforeDefined.add(name);
-    return '${' + inner + '}';
+    return substituteVariablesPure(text, this.variables, this.usedBeforeDefined);
   }
 
   /**
    * Get current line without advancing
+   *
+   * @returns {string|null}
    */
   peek() {
     return this.index < this.lines.length ? this.lines[this.index] : null;
@@ -696,6 +575,8 @@ class PoemParser {
 
   /**
    * Get current line and advance
+   *
+   * @returns {string|null}
    */
   next() {
     return this.index < this.lines.length ? this.lines[this.index++] : null;
@@ -703,6 +584,8 @@ class PoemParser {
 
   /**
    * Check if we're at end of file
+   *
+   * @returns {boolean}
    */
   eof() {
     return this.index >= this.lines.length;
@@ -714,6 +597,9 @@ class PoemParser {
    *   <<<            -> ''        (raw passthrough)
    *   <<<markdown    -> 'markdown'(rendered as GFM)
    *   <<<yaml  # ... -> 'yaml'    (unknown tag -> raw passthrough)
+   *
+   * @param {string|null} line
+   * @returns {string|null}
    */
   blockStartTag(line) {
     if (line === null) return null;
@@ -723,6 +609,9 @@ class PoemParser {
 
   /**
    * True if `line` is a block end marker (`>>>`, ignoring trailing text).
+   *
+   * @param {string|null} line
+   * @returns {boolean}
    */
   isBlockEnd(line) {
     return line !== null && /^>>>(?:\s.*)?$/.test(line.trim());
@@ -731,6 +620,8 @@ class PoemParser {
   /**
    * Read a `<<< ... >>>` block starting at the current line. Consumes the start
    * and end markers and returns { tag, lines } with the raw inner lines.
+   *
+   * @returns {{tag: string, lines: string[]}}
    */
   readBlock() {
     const tag = this.blockStartTag(this.peek()) || '';
@@ -751,6 +642,10 @@ class PoemParser {
    * Markdown rendering, not variable substitution):
    *   markdown/md -> GFM
    *   anything else -> raw passthrough (no Markdown conversion)
+   *
+   * @param {string} tag
+   * @param {string[]} lines
+   * @returns {string}
    */
   renderBlock(tag, lines) {
     const substituted = lines.map(l => this.substituteVariables(l));
@@ -771,11 +666,14 @@ class PoemParser {
 
   /**
    * Expect a specific marker (e.g., ==== or ----)
+   *
+   * @param {string} marker
+   * @param {string} name - documents which marker each call site expects (e.g.
+   *   'end-of-poem'); kept for call-site readability, not yet threaded into a
+   *   failure message
+   * @returns {boolean}
    */
-  // `name` documents which marker each call site expects (e.g.
-  // 'end-of-poem'); kept for call-site readability, not yet threaded into a
-  // failure message.
-  // eslint-disable-next-line no-unused-vars -- see comment above
+  // eslint-disable-next-line no-unused-vars -- see @param name above
   expectMarker(marker, name) {
     this.skipBlankLines();
     const line = this.peek();
@@ -795,6 +693,9 @@ class PoemParser {
    * surviving this parse stage. The negative lookahead `(?!\{)` is what enforces
    * that carve-out. This lets a title (or body/label text) begin with a literal
    * `%` without being mistaken for a directive.
+   *
+   * @param {string} text
+   * @returns {string}
    */
   decodePercentEscape(text) {
     return text.replace(/\\%(?!\{)/g, '%');
@@ -909,6 +810,8 @@ class PoemParser {
 
   /**
    * Parse a single version
+   *
+   * @returns {{label?: string, params?: object, segments: object[]}|null}
    */
   parseVersion() {
     this.skipBlankLines();
@@ -925,7 +828,7 @@ class PoemParser {
     if (firstLine.trim().startsWith('{{') && firstLine.trim().includes('}}')) {
       const { label, params } = this.parseLabelWithParams(firstLine, '{{');
       if (label) {
-        version.label = this.convertMarkup(this.substituteVariables(label));
+        version.label = convertMarkup(this.substituteVariables(label));
       }
       if (params) {
         version.params = params;
@@ -956,29 +859,9 @@ class PoemParser {
   }
 
   /**
-   * Convert spaces to non-breaking spaces in poem lines
-   * - Leading spaces (indentation) are converted to &nbsp;
-   * - Multiple consecutive spaces within lines are converted to alternating
-   *   space + &nbsp; pattern (e.g., "  " becomes " &nbsp;") to allow wrapping
-   *   on small displays while preserving visual spacing
-   */
-  convertSpacesToNbsp(line) {
-    // Convert leading spaces to &nbsp;
-    const leadingSpaces = line.match(/^( +)/);
-    if (leadingSpaces) {
-      const nbspLeading = '&nbsp;'.repeat(leadingSpaces[1].length);
-      line = nbspLeading + line.substring(leadingSpaces[1].length);
-    }
-
-    // Convert multiple consecutive spaces (2 or more) within the line
-    // Pattern: first space is normal (allows wrapping), rest are &nbsp;
-    line = line.replace(/( {2,})/g, (match) => ' ' + '&nbsp;'.repeat(match.length - 1));
-
-    return line;
-  }
-
-  /**
    * Parse a segment within a version
+   *
+   * @returns {object|null}
    */
   parseSegment() {
     this.skipBlankLines();
@@ -994,7 +877,7 @@ class PoemParser {
     if (line.trim().startsWith('{') && line.trim().includes('}') && !line.trim().startsWith('{{')) {
       const { label, params } = this.parseLabelWithParams(line, '{');
       if (label && label !== 'Synopsis' && label !== 'Full') {
-        segment.label = this.convertMarkup(this.substituteVariables(label));
+        segment.label = convertMarkup(this.substituteVariables(label));
         if (params) {
           segment.params = params;
         }
@@ -1071,6 +954,9 @@ class PoemParser {
    * Process a run of WYSIWYG poem lines (blockquotes + inline markup + nbsp)
    * into a single newline-joined HTML string with a trailing newline, or '' if
    * the run is empty after trimming surrounding blank lines.
+   *
+   * @param {string[]} contentLines
+   * @returns {string}
    */
   processWysiwygLines(contentLines) {
     const lines = contentLines.slice();
@@ -1105,7 +991,7 @@ class PoemParser {
         // Convert each inner line, strip any trailing <br/> introduced by
         // trailing spaces, then join with a single <br/> between lines.
         const processedLines = quoteLines.map(l => {
-          let s = this.convertMarkup(l);
+          let s = convertMarkup(l);
           s = s.replace(/\r?\n/g, '');
           s = s.replace(/(?:<br\/>)+$/g, '');
           return s;
@@ -1122,13 +1008,13 @@ class PoemParser {
         i++;
       }
 
-      const withMarkup = this.convertMarkup(normalLines.join('\n'));
+      const withMarkup = convertMarkup(normalLines.join('\n'));
       for (const l of withMarkup.split('\n')) {
         processedParts.push(l);
       }
     }
 
-    return processedParts.map(line => this.convertSpacesToNbsp(line)).join('\n') + '\n';
+    return processedParts.map(line => convertSpacesToNbsp(line)).join('\n') + '\n';
   }
 
   /**
@@ -1358,6 +1244,8 @@ class PoemParser {
 
   /**
    * Parse a single postscript note
+   *
+   * @returns {object|null}
    */
   parsePostscriptNote() {
     this.skipBlankLines();
@@ -1378,7 +1266,7 @@ class PoemParser {
     if (line.trim().startsWith('{') && line.trim().includes('}')) {
       const { label, params } = this.parseLabelWithParams(line, '{');
       if (label && label !== 'Synopsis' && label !== 'Full') {
-        postscript.label = this.convertMarkup(this.substituteVariables(label));
+        postscript.label = convertMarkup(this.substituteVariables(label));
         if (params) {
           postscript.params = params;
         }
@@ -1464,6 +1352,8 @@ class PoemParser {
    *  - `<<<markdown` / `<<<md` -> rendered as GFM (with variable substitution)
    *  - bare `<<<` (or unknown tag) -> raw passthrough; a `$ref:` payload is
    *    returned as a reference object.
+   *
+   * @returns {{content: string}|{$ref: string}}
    */
   parseLiteralBlock() {
     const { tag, lines } = this.readBlock();
@@ -1543,6 +1433,8 @@ class PoemParser {
    * Collects the raw lines of the block (with variable substitution), then hands
    * them to the shared GFM renderer. Headings, lists, tables, fenced code and
    * blockquotes are all handled by markdown-it (see src/tools/markdown.js).
+   *
+   * @returns {string}
    */
   parseAnalysisContent() {
     const contentLines = [];
@@ -1577,22 +1469,6 @@ class PoemParser {
   }
 
   /**
-   * Consume the optional trailing `#comment` (which requires at least one
-   * whitespace character before the `#`) and any trailing whitespace, from
-   * `start` to end of `line`. Returns `true` if the remainder of the line is
-   * exhausted this way, `false` if unconsumed non-whitespace content remains.
-   * Shared by parseDirectiveLine() and matchLabelLine(), whose PCRE
-   * equivalents both end in `(\s+#.*)?\s*$`.
-   */
-  matchesTrailingComment(line, start) {
-    const len = line.length;
-    let i = start;
-    while (i < len && /\s/.test(line[i])) i++;
-    if (i > start && line[i] === '#') return true;
-    return i === len;
-  }
-
-  /**
    * Recognise a directive line (`%name key:value ...`, with an optional trailing
    * `# comment`) and build its structured form. Returns `{ name, attributes? }`
    * — where `attributes` maps each `key:value` token (split on its first `:`)
@@ -1601,58 +1477,21 @@ class PoemParser {
    *
    * Shared by the Metadata section (parseMetadata) and the Preamble pre-pass
    * (extractPreambleDirectives), so a directive parses identically wherever it
-   * is declared.
+   * is declared. Delegates to the pure scanner in poem-metadata.js — see its
+   * docstring for the CodeQL rationale behind the hand-written scan.
    *
-   * Scanned by hand rather than with
-   * /^\s*%([\w.-]+)((?:\s+[\w.]+:[\w.-]+)*)(\s+#.*)?\s*$/i: CodeQL
-   * (js/polynomial-redos) flags that pattern's repeated `key:value` group as
-   * vulnerable to polynomial backtracking on adversarial input.
+   * @param {string} line
+   * @returns {{name: string, attributes?: object}|null}
    */
   parseDirectiveLine(line) {
-    const len = line.length;
-    let i = 0;
-    while (i < len && /\s/.test(line[i])) i++;
-    if (line[i] !== '%') return null;
-    i++;
-
-    const nameStart = i;
-    while (i < len && /[\w.-]/.test(line[i])) i++;
-    if (i === nameStart) return null;
-    const name = line.slice(nameStart, i);
-
-    const attributes = {};
-    let hasAttributes = false;
-
-    while (true) {
-      let j = i;
-      while (j < len && /\s/.test(line[j])) j++;
-      if (j === i) break;
-
-      const keyStart = j;
-      while (j < len && /[\w.]/.test(line[j])) j++;
-      if (j === keyStart || line[j] !== ':') break;
-      const key = line.slice(keyStart, j);
-      j++;
-
-      const valueStart = j;
-      while (j < len && /[\w.-]/.test(line[j])) j++;
-      if (j === valueStart) break;
-
-      attributes[key] = line.slice(valueStart, j);
-      hasAttributes = true;
-      i = j;
-    }
-
-    if (!this.matchesTrailingComment(line, i)) return null;
-
-    const directive = { name };
-    if (hasAttributes) directive.attributes = attributes;
-    return directive;
+    return parseDirectiveLinePure(line);
   }
 
   /**
    * Append a parsed directive to this.result.directives, lazily creating the
    * array so the key stays absent when a poem declares no directives.
+   *
+   * @param {{name: string, attributes?: object}} directive
    */
   pushDirective(directive) {
     if (!this.result.directives) this.result.directives = [];
@@ -1663,26 +1502,14 @@ class PoemParser {
    * Recognise a label line (`#label`, with an optional trailing `# comment`)
    * and return the label text, or `null` when `line` is not a label.
    *
-   * Scanned by hand rather than with
-   * /^\s*#([^&<>\\#\s]+?)(\s+#.*)?\s*$/i: CodeQL (js/polynomial-redos) flags
-   * that pattern's lazy label capture as vulnerable to polynomial
-   * backtracking on adversarial input.
+   * Delegates to the pure scanner in poem-metadata.js — see its docstring
+   * for the CodeQL rationale behind the hand-written scan.
+   *
+   * @param {string} line
+   * @returns {string|null}
    */
   matchLabelLine(line) {
-    const len = line.length;
-    let i = 0;
-    while (i < len && /\s/.test(line[i])) i++;
-    if (line[i] !== '#') return null;
-    i++;
-
-    const labelStart = i;
-    while (i < len && !/[\s&<>\\#]/.test(line[i])) i++;
-    if (i === labelStart) return null;
-    const label = line.slice(labelStart, i);
-
-    if (!this.matchesTrailingComment(line, i)) return null;
-
-    return label;
+    return matchLabelLinePure(line);
   }
 
   /**
@@ -1750,105 +1577,6 @@ class PoemParser {
     this.skipBlankLines();
   }
 
-  /**
-   * `\?` is reserved for a future extended-escape family (see
-   * docs/POEM-SYNTAX.md) and is an error until it is implemented. Only an
-   * ODD backslash run before `?` triggers it; `\\?` (even) is a literal `\`
-   * then `?`, decoded by the escape table in convertMarkup().
-   *
-   * Scanned by hand rather than with /(\\+)\?/g: that pattern is unanchored,
-   * so CodeQL (js/polynomial-redos) flags it as vulnerable to polynomial
-   * backtracking on a long backslash run not followed by `?` anywhere (same
-   * root cause as joinContinuedLines(), above).
-   */
-  checkReservedEscape(text) {
-    for (let searchIndex = 0; ;) {
-      const qIndex = text.indexOf('?', searchIndex);
-      if (qIndex === -1) break;
-      let runStart = qIndex;
-      while (runStart > 0 && text[runStart - 1] === '\\') runStart--;
-      if ((qIndex - runStart) % 2 === 1) throw this.reservedEscapeError();
-      searchIndex = qIndex + 1;
-    }
-  }
-
-  /**
-   * Convert inline markup to HTML
-   */
-  convertMarkup(text) {
-    this.checkReservedEscape(text);
-
-    // Process escapes first. The escape class also decodes `\%` → `%`, but NOT
-    // `\%{`: `\%{name}` is the render-time context-variable literal escape and
-    // must survive this stage (it is decoded later by substituteContextVars()
-    // in poem-render.js). The `%(?!\{)` alternative — a `%` not followed by `{`
-    // — is what carves `\%{` out; every other class character is unconditional.
-    const escapes = new Map();
-    let escapeIndex = 0;
-    text = text.replace(/\\(%(?!\{)|[_*~[`"&'\-<>=$\\/{}])/g, (match, char) => {
-      const placeholder = `\x00ESCAPE${escapeIndex++}\x00`;
-      escapes.set(placeholder, char);
-      return placeholder;
-    });
-
-    // Convert markup (process longer patterns first)
-    text = text.replace(/---/g, '&#8212;'); // Em dash
-    text = text.replace(/--/g, '&#8211;'); // En dash
-
-    // Smart quotes (process BEFORE links and spans to avoid converting HTML attribute quotes)
-    text = text.replace(/`([^`]+)`/g, '&#8216;$1&#8217;'); // Single quotes
-    text = text.replace(/"([^"]+)"/g, '&#8220;$1&#8221;'); // Double quotes
-
-    // Links: [text|url]
-    text = text.replace(/\[([^\]|]+)\|([^\]]+)\]/g, '<a href="https://$2">$1</a>');
-
-    // Span elements: /.classname{content}
-    text = text.replace(/\/\.([^{]*)\{([^}]*)\}/g, (match, className, content) => {
-      if (className === '') {
-        console.warn('Warning: Span element with empty class name');
-        return `<span>${content}</span>`;
-      }
-
-      // Validate class name with regex: /^\w(?:[\w.-]*\w)?$/
-      const classNameRegex = /^\w(?:[\w.-]*\w)?$/;
-      if (!classNameRegex.test(className)) {
-        console.warn(`Warning: Invalid span class name: "${className}"`);
-        return match; // Leave unchanged
-      }
-
-      // Dots separate multiple classes: `/.a.b{x}` → class="a b" (hyphens are
-      // part of a single class name and are preserved).
-      const classAttr = className.split('.').filter(Boolean).join(' ');
-      return `<span class="${classAttr}">${content}</span>`;
-    });
-
-    // Basic formatting (Markdown-style emphasis: ** = strong, * = em)
-    // Strikethrough is a two-character delimiter pair, like ** for strong: a
-    // single ~ is deliberately left unassigned (plain literal text), reserved
-    // for a possible future subscript syntax.
-    text = text.replace(/~~([^~]+)~~/g, '<s>$1</s>'); // Strikethrough
-    // Strong (double markers) must run before emphasis (single markers)
-    text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>'); // Strong
-    text = text.replace(/__([^_]+)__/g, '<strong>$1</strong>'); // Strong (underscore)
-    text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>'); // Emphasis
-    text = text.replace(/_([^_]+)_/g, '<em>$1</em>'); // Emphasis (underscore)
-
-    // Entities - convert & to &#38; but NOT if it's already part of an entity (&#...;)
-    text = text.replace(/&(?!#\d+;|[a-z]+;)/gi, '&#38;');
-    text = text.replace(/'/g, '&#39;');
-
-    // Restore escapes in a single pass over the text, rather than one
-    // replace() (and full rescan) per escape.
-    // eslint-disable-next-line no-control-regex -- \x00 matches the placeholder format built above
-    text = text.replace(/\x00ESCAPE\d+\x00/g, (placeholder) => escapes.get(placeholder));
-
-    // Hard line break: trailing two-or-more spaces before a newline (or end-of-string)
-    // are converted to a hard line break <br/>. This applies outside literal blocks
-    // and is intended to match the common Markdown behaviour for two-space line breaks.
-    text = text.replace(/ {2,}(\r?\n|$)/g, '<br/>$1');
-
-    return text;
-  }
 }
 
 module.exports = { PoemParser };

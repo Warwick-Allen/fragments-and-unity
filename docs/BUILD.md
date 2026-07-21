@@ -36,8 +36,8 @@ Since GitHub Pages serves static files only, we use a build script to generate t
 
 The main build script:
 
-1. Scans the `public/` directory for all HTML files
-2. Extracts metadata (title, date, audio links) from each poem
+1. Reads all poem YAML files from `src/poems/yaml/`
+2. Renders each poem fragment in-memory using the shared renderer
 3. Sorts poems chronologically by date using the date utility functions
 4. Generates a comprehensive `all-poems.html` file with:
    - Table of contents with sorting functionality
@@ -59,7 +59,7 @@ These utilities ensure consistent date handling across the build process.
 The Blogger template script:
 
 1. Reads and concatenates CSS from `public/poetic.css` and `public/custom.css`
-2. Locates the Blogger template file `public/fragments-and-unity.template.html`
+2. Locates the Blogger template file `public/blogger-template.html`
 3. Finds CSS delimiters `/* ~~ CUSTOM CSS START ~~ */` and `/* ~~ CUSTOM CSS END ~~ */`
 4. Replaces the content between these delimiters with the combined styles
 5. Provides error handling for missing files or malformed delimiters
@@ -88,7 +88,7 @@ When you need to update the Blogger template with new CSS:
 
 1. Edit `public/poetic.css` (framework styles, synced) or `public/custom.css` (your styles, never synced)
 2. Run `npm run build:blogger` to inject the combined CSS into the template
-3. Copy the updated `public/fragments-and-unity.template.html` content
+3. Copy the updated `public/blogger-template.html` content
 4. Paste it into the Blogger template editor
 5. Save the template in Blogger
 
@@ -101,13 +101,13 @@ public/
 ├── index.html                           # Main landing page
 ├── all-poems.html                       # Generated concatenated view
 ├── poetic.css                           # Framework CSS (synced from poetic)
-├── poetic.js                            # Framework JS — shared Audiomack loader (synced)
+├── poetic.js                            # Framework JS — lazy-load song embeds and postscript toggle (synced)
 ├── index.js                             # Poem-grid renderer for index.html (synced)
 ├── all-poems.js                         # Sort/filter script for all-poems.html (synced)
 ├── date-utils.js                        # Copy of src/tools/date-utils.js (build artefact, gitignored)
 ├── poetic-footer.html                   # Default footer content (synced; see footer.source)
 ├── custom.css                           # User CSS (never overwritten by sync)
-├── fragments-and-unity.template.html    # Blogger template with injected CSS
+├── blogger-template.html                # Blogger template with injected CSS
 ├── poem1.html                           # Redirect stub → poem1/ (meta-refresh)
 ├── poem2.html
 ├── poem1/
@@ -119,7 +119,7 @@ public/
 src/poems/
 ├── poem/
 │   ├── _example.poem                    # Example poem source
-│   ├── _shared.poem                     # Shared poem content included by others
+│   ├── .shared.poem                     # Shared poem content included by others
 │   ├── poem1.poem                       # Individual poem source files
 │   ├── poem2.poem
 │   └── ...
@@ -160,10 +160,7 @@ The poem-grid renderer on `index.html` and the sort/filter bar on
 pages:
 
 - `index.html` carries its poem list as a `<script type="application/json"
-  id="poem-data">` data island; `index.js` reads and `JSON.parse`s it. A
-  previously-built `index.html` still carrying an older inline `const
-  allPoems = [...]` script (from before this data island existed) is
-  rewritten to the current format automatically the next time it's built.
+  id="poem-data">` data island; `index.js` reads and `JSON.parse`s it.
 - `all-poems.html` needs no equivalent data island — it reads the poem
   table/sections already present in its own DOM.
 
@@ -472,13 +469,13 @@ every key — copy the section you need and uncomment it — lives at
 | `auto_sync.enabled` | _(off)_ | Set to `true` to enable the scheduled sync workflow |
 | `auto_sync.schedule` | `weekly` | How often the scheduled sync runs: `hourly`, `daily`, or `weekly` |
 | `footer.enabled` | `true` | Set to `false` to omit the footer from every built page |
-| `footer.source` | `public/poetic-footer.html` | Path to the HTML file whose contents are injected as the page footer |
+| `footer.source` | `public/poetic-footer.html` | Path to the HTML file whose contents are injected as the page footer (relative to the repository root, and must resolve inside it — see [Footer](#footer)) |
 | `blogger.sync` | `false` | Set to `true` to enable automatic Blogger publishing via GitHub Actions |
 | `blogger.blog_id` | _(required when enabled)_ | Numeric Blogger blog ID (visible in the blog URL in Blogger settings) — quote it as a string; it exceeds `Number.MAX_SAFE_INTEGER` and loses precision as a YAML number |
 | `blogger.removed` | `draft` | What happens to a post when its source poem is removed: `draft`, `delete`, or `keep` |
 | `blogger.content` | `full` | Content posted to Blogger: `full` (complete styled HTML page) or `poem` (poem fragment only) |
 | `blogger.label` | `poem` | Blogger label applied to all managed posts |
-| `blogger.template` | `public/blogger-template.html` | Path to the Blogger XML theme template file injected by `npm run build:blogger` |
+| `blogger.template` | `public/blogger-template.html` | Path to the Blogger XML theme template file injected by `npm run build:blogger` (relative to the repository root, and must resolve inside it) |
 | `song_handlers` | _(none)_ | Map of custom song-handler definitions (service name → `link_url`/`embed_url`/labels/size/handler-specific config), deep-merged with the builtin `audiomack`/`suno`/`mega` handlers; see [Custom song handlers](#custom-song-handlers) |
 
 Example:
@@ -549,6 +546,8 @@ Or supply your own footer content by pointing `footer.source` at a file of your 
 footer:
   source: public/my-footer.html
 ```
+
+A relative `footer.source` is resolved against the repository root; an absolute one is used as given. Either way it must resolve to a path inside the repository — a value that points outside it (via `../` or an absolute path elsewhere on disk) is reported as a warning and the default footer source is used instead, since the file's contents are published verbatim.
 
 The footer source file is raw HTML, injected verbatim inside a `<footer class="poetic-footer">` wrapper. It may reference `%{base}` — the relative path prefix back to the site root (`''` on `index.html`/`all-poems.html`, `../` on one-directory-deep pages like individual poem pages and `raw/index.html`) — useful for linking an image or asset that lives in `public/`:
 

@@ -1,11 +1,14 @@
 'use strict';
 
 /**
- * Tests for sync-blogger.js pure helpers.
+ * Tests for sync-blogger.js's pure helpers and its extracted orchestration.
  *
  * Covers: parseArgs, resolveConfig, extractSlug, mapBySlug,
  * bloggerAcceptableLabels, composePost, normalizeHtml, postNeedsUpdate,
- * selectRemoved, extractContent, explainBloggerFailure.
+ * selectRemoved, extractContent, explainBloggerFailure, fetchWithRetry,
+ * createPost, and (integration-style, with global.fetch mocked) syncPoem and
+ * processRemovals — the per-poem create/update/skip decision and the
+ * removal-pass loop that main() drives.
  */
 
 const { test } = require('node:test');
@@ -26,6 +29,10 @@ const {
   selectRemoved,
   extractContent,
   explainBloggerFailure,
+  fetchWithRetry,
+  createPost,
+  syncPoem,
+  processRemovals,
 } = require('../src/tools/sync-blogger');
 
 // ── parseArgs ─────────────────────────────────────────────────────────────────
@@ -72,6 +79,20 @@ test('parseArgs: unknown flags are silently ignored', () => {
 // a real `.blogger-credentials.json` that might exist in the process's CWD
 // (e.g. in a consumer repo that has run blogger-auth.js) — see TECH-DEBT.md.
 
+// Run `fn`, capturing every console.warn call instead of printing it; restores
+// console.warn afterwards even if `fn` throws.
+function withCapturedWarnings(fn) {
+  const originalWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    fn();
+  } finally {
+    console.warn = originalWarn;
+  }
+  return warnings;
+}
+
 test('resolveConfig: defaults when config is empty', () => {
   const opts = resolveConfig({}, {}, null);
   assert.strictEqual(opts.enabled, false);
@@ -111,8 +132,10 @@ test('resolveConfig: valid removed values are accepted', () => {
 });
 
 test('resolveConfig: invalid removed falls back to "draft"', () => {
-  assert.strictEqual(resolveConfig({ blogger: { removed: 'archive' } }, {}, null).removed, 'draft');
-  assert.strictEqual(resolveConfig({ blogger: { removed: '' } }, {}, null).removed, 'draft');
+  withCapturedWarnings(() => {
+    assert.strictEqual(resolveConfig({ blogger: { removed: 'archive' } }, {}, null).removed, 'draft');
+    assert.strictEqual(resolveConfig({ blogger: { removed: '' } }, {}, null).removed, 'draft');
+  });
 });
 
 test('resolveConfig: valid content values are accepted', () => {
@@ -121,8 +144,40 @@ test('resolveConfig: valid content values are accepted', () => {
 });
 
 test('resolveConfig: invalid content falls back to "full"', () => {
-  assert.strictEqual(resolveConfig({ blogger: { content: 'text' } }, {}, null).content, 'full');
-  assert.strictEqual(resolveConfig({ blogger: { content: '' } }, {}, null).content, 'full');
+  withCapturedWarnings(() => {
+    assert.strictEqual(resolveConfig({ blogger: { content: 'text' } }, {}, null).content, 'full');
+    assert.strictEqual(resolveConfig({ blogger: { content: '' } }, {}, null).content, 'full');
+  });
+});
+
+test('resolveConfig: warns on an invalid blogger.removed value, naming it and the valid options', () => {
+  const warnings = withCapturedWarnings(() => {
+    resolveConfig({ blogger: { removed: 'archive' } }, {}, null);
+  });
+  assert.strictEqual(warnings.length, 1);
+  assert.match(warnings[0], /blogger\.removed/);
+  assert.match(warnings[0], /archive/);
+  assert.match(warnings[0], /draft, delete, keep/);
+});
+
+test('resolveConfig: does not warn when blogger.removed is a valid value or unset', () => {
+  assert.deepStrictEqual(withCapturedWarnings(() => resolveConfig({ blogger: { removed: 'delete' } }, {}, null)), []);
+  assert.deepStrictEqual(withCapturedWarnings(() => resolveConfig({}, {}, null)), []);
+});
+
+test('resolveConfig: warns on an invalid blogger.content value, naming it and the valid options', () => {
+  const warnings = withCapturedWarnings(() => {
+    resolveConfig({ blogger: { content: 'text' } }, {}, null);
+  });
+  assert.strictEqual(warnings.length, 1);
+  assert.match(warnings[0], /blogger\.content/);
+  assert.match(warnings[0], /text/);
+  assert.match(warnings[0], /full, poem/);
+});
+
+test('resolveConfig: does not warn when blogger.content is a valid value or unset', () => {
+  assert.deepStrictEqual(withCapturedWarnings(() => resolveConfig({ blogger: { content: 'poem' } }, {}, null)), []);
+  assert.deepStrictEqual(withCapturedWarnings(() => resolveConfig({}, {}, null)), []);
 });
 
 test('resolveConfig: hasCredentials true when all three vars present', () => {
@@ -142,7 +197,8 @@ test('resolveConfig: hasCredentials false when any var missing', () => {
 
 test('resolveConfig: hasCredentials true when missing env vars are filled in from the credentials file', () => {
   const fixturePath = path.join(__dirname, 'fixtures', 'blogger-credentials.json');
-  const opts = resolveConfig({}, { BLOGGER_CLIENT_ID: 'x' }, fixturePath);
+  let opts;
+  withCapturedWarnings(() => { opts = resolveConfig({}, { BLOGGER_CLIENT_ID: 'x' }, fixturePath); });
   assert.strictEqual(opts.hasCredentials, true);
 });
 
@@ -156,7 +212,8 @@ test('resolveConfig: reads credentials from top-level keys in credentials file',
       note: 'Test credentials'
     };
     fs.writeFileSync(tmpPath, JSON.stringify(credData));
-    const opts = resolveConfig({}, {}, tmpPath);
+    let opts;
+    withCapturedWarnings(() => { opts = resolveConfig({}, {}, tmpPath); });
     assert.strictEqual(opts.hasCredentials, true);
     assert.strictEqual(opts.clientId, 'toplevel-client-id');
     assert.strictEqual(opts.clientSecret, 'toplevel-client-secret');
@@ -168,7 +225,8 @@ test('resolveConfig: reads credentials from top-level keys in credentials file',
 
 test('resolveConfig: reads credentials from nested installed object in credentials file', () => {
   const fixturePath = path.join(__dirname, 'fixtures', 'blogger-credentials.json');
-  const opts = resolveConfig({}, {}, fixturePath);
+  let opts;
+  withCapturedWarnings(() => { opts = resolveConfig({}, {}, fixturePath); });
   assert.strictEqual(opts.clientId, 'fixture-client-id');
   assert.strictEqual(opts.clientSecret, 'fixture-client-secret');
   assert.strictEqual(opts.refreshToken, 'fixture-refresh-token');
@@ -189,7 +247,8 @@ test('resolveConfig: top-level keys take precedence over nested installed object
       }
     };
     fs.writeFileSync(tmpPath, JSON.stringify(credData));
-    const opts = resolveConfig({}, {}, tmpPath);
+    let opts;
+    withCapturedWarnings(() => { opts = resolveConfig({}, {}, tmpPath); });
     assert.strictEqual(opts.clientId, 'toplevel-id');
     assert.strictEqual(opts.clientSecret, 'toplevel-secret');
     assert.strictEqual(opts.refreshToken, 'toplevel-token');
@@ -200,11 +259,46 @@ test('resolveConfig: top-level keys take precedence over nested installed object
 
 test('resolveConfig: env vars override file credentials independently', () => {
   const fixturePath = path.join(__dirname, 'fixtures', 'blogger-credentials.json');
-  const opts = resolveConfig({}, { BLOGGER_CLIENT_ID: 'env-id' }, fixturePath);
+  let opts;
+  withCapturedWarnings(() => { opts = resolveConfig({}, { BLOGGER_CLIENT_ID: 'env-id' }, fixturePath); });
   assert.strictEqual(opts.clientId, 'env-id');
   assert.strictEqual(opts.clientSecret, 'fixture-client-secret');
   assert.strictEqual(opts.refreshToken, 'fixture-refresh-token');
 });
+
+test('resolveConfig: warns when the credentials file is readable/writable beyond its owner',
+  { skip: process.platform === 'win32' ? 'POSIX file permission bits only' : false },
+  () => {
+    const tmpPath = path.join(os.tmpdir(), `blogger-creds-loose-${process.pid}-${Date.now()}.json`);
+    try {
+      fs.writeFileSync(tmpPath, JSON.stringify({
+        client_id: 'x', client_secret: 'y', refresh_token: 'z',
+      }));
+      fs.chmodSync(tmpPath, 0o644);
+      const warnings = withCapturedWarnings(() => resolveConfig({}, {}, tmpPath));
+      assert.strictEqual(warnings.length, 1);
+      assert.match(warnings[0], new RegExp(tmpPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      assert.match(warnings[0], /0?644/);
+    } finally {
+      fs.rmSync(tmpPath, { force: true });
+    }
+  });
+
+test('resolveConfig: does not warn when the credentials file is 0600',
+  { skip: process.platform === 'win32' ? 'POSIX file permission bits only' : false },
+  () => {
+    const tmpPath = path.join(os.tmpdir(), `blogger-creds-strict-${process.pid}-${Date.now()}.json`);
+    try {
+      fs.writeFileSync(tmpPath, JSON.stringify({
+        client_id: 'x', client_secret: 'y', refresh_token: 'z',
+      }));
+      fs.chmodSync(tmpPath, 0o600);
+      const warnings = withCapturedWarnings(() => resolveConfig({}, {}, tmpPath));
+      assert.deepStrictEqual(warnings, []);
+    } finally {
+      fs.rmSync(tmpPath, { force: true });
+    }
+  });
 
 // ── extractSlug ───────────────────────────────────────────────────────────────
 
@@ -727,5 +821,451 @@ test('explainBloggerFailure: returns null when it has nothing useful to add', ()
   assert.strictEqual(
     explainBloggerFailure({ operation: 'getAccessToken', status: 503, body: 'unavailable' }),
     null
+  );
+});
+
+// ── fetchWithRetry ────────────────────────────────────────────────────────────
+
+async function withMockFetch(mockFetch, run) {
+  const original = global.fetch;
+  global.fetch = mockFetch;
+  try {
+    return await run();
+  } finally {
+    global.fetch = original;
+  }
+}
+
+test('fetchWithRetry: passes an AbortSignal with a timeout through to fetch', async () => {
+  let capturedInit;
+  await withMockFetch(
+    async (url, init) => { capturedInit = init; return { status: 200 }; },
+    () => fetchWithRetry('https://example.com', { headers: { X: '1' } })
+  );
+  assert.ok(capturedInit.signal instanceof AbortSignal);
+  assert.strictEqual(capturedInit.headers.X, '1');
+});
+
+test('fetchWithRetry: returns the response unchanged on a non-retryable status', async () => {
+  let calls = 0;
+  const response = await withMockFetch(
+    async () => { calls++; return { status: 404 }; },
+    () => fetchWithRetry('https://example.com')
+  );
+  assert.strictEqual(response.status, 404);
+  assert.strictEqual(calls, 1);
+});
+
+test('fetchWithRetry: retries once on a 429 response', async () => {
+  let calls = 0;
+  const response = await withMockFetch(
+    async () => { calls++; return { status: calls === 1 ? 429 : 200 }; },
+    () => fetchWithRetry('https://example.com')
+  );
+  assert.strictEqual(response.status, 200);
+  assert.strictEqual(calls, 2);
+});
+
+test('fetchWithRetry: retries once on a 5xx response', async () => {
+  let calls = 0;
+  const response = await withMockFetch(
+    async () => { calls++; return { status: calls === 1 ? 503 : 200 }; },
+    () => fetchWithRetry('https://example.com')
+  );
+  assert.strictEqual(response.status, 200);
+  assert.strictEqual(calls, 2);
+});
+
+test('fetchWithRetry: retries once on a network-level rejection', async () => {
+  let calls = 0;
+  const response = await withMockFetch(
+    async () => {
+      calls++;
+      if (calls === 1) throw new TypeError('fetch failed');
+      return { status: 200 };
+    },
+    () => fetchWithRetry('https://example.com')
+  );
+  assert.strictEqual(response.status, 200);
+  assert.strictEqual(calls, 2);
+});
+
+test('fetchWithRetry: propagates rejection when the retry also fails', async () => {
+  const calls = { count: 0 };
+  await assert.rejects(
+    () => withMockFetch(
+      async () => { calls.count++; throw new Error('network down'); },
+      () => fetchWithRetry('https://example.com')
+    ),
+    /network down/
+  );
+  assert.strictEqual(calls.count, 2);
+});
+
+test('fetchWithRetry: retryable false does not retry a network-level rejection', async () => {
+  let calls = 0;
+  await assert.rejects(
+    () => withMockFetch(
+      async () => { calls++; throw new Error('network down'); },
+      () => fetchWithRetry('https://example.com', undefined, { retryable: false })
+    ),
+    /network down/
+  );
+  assert.strictEqual(calls, 1);
+});
+
+test('fetchWithRetry: retryable false does not retry a 5xx response', async () => {
+  let calls = 0;
+  const response = await withMockFetch(
+    async () => { calls++; return { status: 503 }; },
+    () => fetchWithRetry('https://example.com', undefined, { retryable: false })
+  );
+  assert.strictEqual(response.status, 503);
+  assert.strictEqual(calls, 1);
+});
+
+test('createPost: a rejected create is not retried', async () => {
+  let calls = 0;
+  await assert.rejects(
+    () => withMockFetch(
+      async () => { calls++; throw new Error('connection reset'); },
+      () => createPost('BLOG1', 'TOKEN1', { title: 'x' })
+    ),
+    /connection reset/
+  );
+  assert.strictEqual(calls, 1);
+});
+
+// ── syncPoem / processRemovals (integration: mocked global.fetch) ────────────
+
+function jsonResponse(status, body = {}) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  };
+}
+
+async function withCapturedLogsAsync(run) {
+  const originalLog = console.log;
+  const logs = [];
+  console.log = (...args) => logs.push(args.join(' '));
+  try {
+    const result = await run();
+    return { result, logs };
+  } finally {
+    console.log = originalLog;
+  }
+}
+
+const DESIRED_POST = {
+  kind: 'blogger#post',
+  title: 'My Poem',
+  content: '<p>verse</p>',
+  labels: ['poem'],
+  published: '2024-03-15T00:00:00Z',
+};
+
+test('syncPoem: creates a new post, renames it from its dated title, and returns "created"', async () => {
+  const calls = [];
+  const outcome = await withMockFetch(
+    async (url, init) => {
+      calls.push({ url, method: init.method });
+      return init.method === 'POST' ? jsonResponse(200, { id: 'new-id' }) : jsonResponse(200, {});
+    },
+    () => syncPoem({
+      existing: undefined,
+      desired: DESIRED_POST,
+      isoDate: '2024-03-15',
+      blogId: 'BLOG1',
+      token: 'TOKEN1',
+      dryRun: false,
+    })
+  );
+  assert.strictEqual(outcome, 'created');
+  assert.strictEqual(calls.length, 2);
+  assert.strictEqual(calls[0].method, 'POST');
+  assert.ok(calls[0].url.includes('/blogs/BLOG1/posts/'));
+  assert.strictEqual(calls[1].method, 'PUT');
+  assert.ok(calls[1].url.includes('/posts/new-id'));
+});
+
+test('syncPoem: create in dry-run mode makes no network calls and logs the planned rename', async () => {
+  let calls = 0;
+  const { result: outcome, logs } = await withCapturedLogsAsync(() => withMockFetch(
+    async () => { calls++; return jsonResponse(200, {}); },
+    () => syncPoem({
+      existing: undefined,
+      desired: DESIRED_POST,
+      isoDate: '2024-03-15',
+      blogId: 'BLOG1',
+      token: 'TOKEN1',
+      dryRun: true,
+    })
+  ));
+  assert.strictEqual(outcome, 'created');
+  assert.strictEqual(calls, 0);
+  assert.ok(logs.some(l => l.includes('[create] "15 My Poem"') && l.includes('rename to "My Poem"')));
+});
+
+test('syncPoem: updates an existing post that needs changes and returns "updated"', async () => {
+  const calls = [];
+  const existing = { id: 'existing-id', title: 'Old', content: '<p>old</p>', labels: ['poem'] };
+  const outcome = await withMockFetch(
+    async (url, init) => { calls.push({ url, method: init.method }); return jsonResponse(200, {}); },
+    () => syncPoem({
+      existing,
+      desired: DESIRED_POST,
+      isoDate: '2024-03-15',
+      blogId: 'BLOG1',
+      token: 'TOKEN1',
+      dryRun: false,
+    })
+  );
+  assert.strictEqual(outcome, 'updated');
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls[0].method, 'PUT');
+  assert.ok(calls[0].url.includes('/posts/existing-id'));
+});
+
+test('syncPoem: update in dry-run mode makes no network calls and logs the planned update', async () => {
+  let calls = 0;
+  const existing = { id: 'existing-id', title: 'Old', content: '<p>old</p>', labels: ['poem'] };
+  const { result: outcome, logs } = await withCapturedLogsAsync(() => withMockFetch(
+    async () => { calls++; return jsonResponse(200, {}); },
+    () => syncPoem({
+      existing,
+      desired: DESIRED_POST,
+      isoDate: '2024-03-15',
+      blogId: 'BLOG1',
+      token: 'TOKEN1',
+      dryRun: true,
+    })
+  ));
+  assert.strictEqual(outcome, 'updated');
+  assert.strictEqual(calls, 0);
+  assert.ok(logs.some(l => l.includes('[update] My Poem')));
+});
+
+test('syncPoem: skips a post that already matches and returns "unchanged"', async () => {
+  let calls = 0;
+  const existing = {
+    title: DESIRED_POST.title,
+    content: DESIRED_POST.content,
+    labels: DESIRED_POST.labels,
+    published: DESIRED_POST.published,
+  };
+  const outcome = await withMockFetch(
+    async () => { calls++; return jsonResponse(200, {}); },
+    () => syncPoem({
+      existing,
+      desired: DESIRED_POST,
+      isoDate: '2024-03-15',
+      blogId: 'BLOG1',
+      token: 'TOKEN1',
+      dryRun: false,
+    })
+  );
+  assert.strictEqual(outcome, 'unchanged');
+  assert.strictEqual(calls, 0);
+});
+
+test('syncPoem: skip in dry-run mode makes no network calls and logs the skip', async () => {
+  let calls = 0;
+  const existing = {
+    title: DESIRED_POST.title,
+    content: DESIRED_POST.content,
+    labels: DESIRED_POST.labels,
+    published: DESIRED_POST.published,
+  };
+  const { result: outcome, logs } = await withCapturedLogsAsync(() => withMockFetch(
+    async () => { calls++; return jsonResponse(200, {}); },
+    () => syncPoem({
+      existing,
+      desired: DESIRED_POST,
+      isoDate: '2024-03-15',
+      blogId: 'BLOG1',
+      token: 'TOKEN1',
+      dryRun: true,
+    })
+  ));
+  assert.strictEqual(outcome, 'unchanged');
+  assert.strictEqual(calls, 0);
+  assert.ok(logs.some(l => l.includes('[skip] My Poem')));
+});
+
+test('syncPoem: propagates a Blogger API failure on create', async () => {
+  await assert.rejects(
+    () => withMockFetch(
+      async () => jsonResponse(500, {}),
+      () => syncPoem({
+        existing: undefined,
+        desired: DESIRED_POST,
+        isoDate: '2024-03-15',
+        blogId: 'BLOG1',
+        token: 'TOKEN1',
+        dryRun: false,
+      })
+    ),
+    /createPost/
+  );
+});
+
+test('syncPoem: propagates a Blogger API failure on update', async () => {
+  const existing = { id: 'existing-id', title: 'Old', content: '<p>old</p>', labels: ['poem'] };
+  await assert.rejects(
+    () => withMockFetch(
+      async () => jsonResponse(500, {}),
+      () => syncPoem({
+        existing,
+        desired: DESIRED_POST,
+        isoDate: '2024-03-15',
+        blogId: 'BLOG1',
+        token: 'TOKEN1',
+        dryRun: false,
+      })
+    ),
+    /updatePost/
+  );
+});
+
+const REMOVED_POST = {
+  id: 'gone-id',
+  title: 'Gone',
+  content: '<div id="poem--gone">x</div>',
+  labels: ['poem'],
+  status: 'LIVE',
+};
+
+test('processRemovals: drafts a removed post and returns handled=1', async () => {
+  const calls = [];
+  const handled = await withMockFetch(
+    async (url, init) => { calls.push({ url, method: init.method }); return jsonResponse(200, {}); },
+    () => processRemovals({
+      posts: [REMOVED_POST],
+      currentSlugs: new Set(),
+      label: 'poem',
+      removedMode: 'draft',
+      blogId: 'BLOG1',
+      token: 'TOKEN1',
+      dryRun: false,
+    })
+  );
+  assert.strictEqual(handled, 1);
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls[0].method, 'POST');
+  assert.ok(calls[0].url.includes('/posts/gone-id/revert'));
+});
+
+test('processRemovals: draft in dry-run mode makes no network calls and logs the plan', async () => {
+  let calls = 0;
+  const { result: handled, logs } = await withCapturedLogsAsync(() => withMockFetch(
+    async () => { calls++; return jsonResponse(200, {}); },
+    () => processRemovals({
+      posts: [REMOVED_POST],
+      currentSlugs: new Set(),
+      label: 'poem',
+      removedMode: 'draft',
+      blogId: 'BLOG1',
+      token: 'TOKEN1',
+      dryRun: true,
+    })
+  ));
+  assert.strictEqual(handled, 1);
+  assert.strictEqual(calls, 0);
+  assert.ok(logs.some(l => l.includes('[draft] Gone')));
+});
+
+test('processRemovals: deletes a removed post when removedMode is "delete"', async () => {
+  const calls = [];
+  const handled = await withMockFetch(
+    async (url, init) => { calls.push({ url, method: init.method }); return jsonResponse(200, {}); },
+    () => processRemovals({
+      posts: [REMOVED_POST],
+      currentSlugs: new Set(),
+      label: 'poem',
+      removedMode: 'delete',
+      blogId: 'BLOG1',
+      token: 'TOKEN1',
+      dryRun: false,
+    })
+  );
+  assert.strictEqual(handled, 1);
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls[0].method, 'DELETE');
+  assert.ok(calls[0].url.includes('/posts/gone-id'));
+});
+
+test('processRemovals: delete in dry-run mode makes no network calls and logs the plan', async () => {
+  let calls = 0;
+  const { result: handled, logs } = await withCapturedLogsAsync(() => withMockFetch(
+    async () => { calls++; return jsonResponse(200, {}); },
+    () => processRemovals({
+      posts: [REMOVED_POST],
+      currentSlugs: new Set(),
+      label: 'poem',
+      removedMode: 'delete',
+      blogId: 'BLOG1',
+      token: 'TOKEN1',
+      dryRun: true,
+    })
+  ));
+  assert.strictEqual(handled, 1);
+  assert.strictEqual(calls, 0);
+  assert.ok(logs.some(l => l.includes('[delete] Gone')));
+});
+
+test('processRemovals: "keep" leaves removed posts untouched and makes no network calls', async () => {
+  let calls = 0;
+  const handled = await withMockFetch(
+    async () => { calls++; return jsonResponse(200, {}); },
+    () => processRemovals({
+      posts: [REMOVED_POST],
+      currentSlugs: new Set(),
+      label: 'poem',
+      removedMode: 'keep',
+      blogId: 'BLOG1',
+      token: 'TOKEN1',
+      dryRun: false,
+    })
+  );
+  assert.strictEqual(handled, 0);
+  assert.strictEqual(calls, 0);
+});
+
+test('processRemovals: returns handled=0 and makes no calls when nothing is removed', async () => {
+  let calls = 0;
+  const handled = await withMockFetch(
+    async () => { calls++; return jsonResponse(200, {}); },
+    () => processRemovals({
+      posts: [REMOVED_POST],
+      currentSlugs: new Set(['gone']),
+      label: 'poem',
+      removedMode: 'draft',
+      blogId: 'BLOG1',
+      token: 'TOKEN1',
+      dryRun: false,
+    })
+  );
+  assert.strictEqual(handled, 0);
+  assert.strictEqual(calls, 0);
+});
+
+test('processRemovals: propagates a Blogger API failure', async () => {
+  await assert.rejects(
+    () => withMockFetch(
+      async () => jsonResponse(500, {}),
+      () => processRemovals({
+        posts: [REMOVED_POST],
+        currentSlugs: new Set(),
+        label: 'poem',
+        removedMode: 'draft',
+        blogId: 'BLOG1',
+        token: 'TOKEN1',
+        dryRun: false,
+      })
+    ),
+    /revertPost/
   );
 });

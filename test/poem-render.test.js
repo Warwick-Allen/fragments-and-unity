@@ -312,13 +312,13 @@ versions:
       - lines: "Hello world\\n"
 `;
 
-test('renderPage: h2.poem-title renders restricted markup, head <title> stays plain', () => {
+test('renderPage: h1.poem-title renders restricted markup, head <title> stays plain', () => {
   const { yamlPath } = writeTempYaml(MARKUP_TITLE_YAML);
   const poemData = loadPoemData(yamlPath);
   const html = renderPage(poemData, { favicon: 'poetic-logo.svg' });
 
   assert.ok(
-    html.includes('<h2 class="poem-title">A <strong>bold</strong> and <em>soft</em> &lt;tag&gt; &amp; co</h2>'),
+    html.includes('<h1 class="poem-title">A <strong>bold</strong> and <em>soft</em> &lt;tag&gt; &amp; co</h1>'),
     'visible heading must render markup and escape < & to inert text',
   );
   assert.ok(
@@ -397,19 +397,19 @@ function postscriptPoemData(postscript) {
   };
 }
 
-test('postscript with explicit preview params emits the checkbox toggle, --preview-lines budget, and label', () => {
+test('postscript with explicit preview params emits the button toggle, --preview-lines budget, and aria-controls', () => {
   const poemData = postscriptPoemData([
     { label: 'My Note', params: { preview: 'true', 'preview-lines': '3' }, content: '<p>Some content</p>' },
   ]);
   const html = renderFragment(poemData, {});
 
-  assert.ok(html.includes('class="postscript-toggle-cb hidden"'), 'must include the hidden toggle checkbox');
-  assert.ok(html.includes('type="checkbox"'), 'toggle input must be a checkbox');
+  assert.ok(html.includes('type="button"'), 'toggle must be a real <button>');
+  assert.ok(html.includes('aria-expanded="false"'), 'toggle must start collapsed via aria-expanded');
   assert.ok(html.includes('--preview-lines: 3'), 'postscript-content style must carry the preview-lines budget');
   assert.ok(html.includes('data-preview-lines="3"'), 'postscript-content must carry data-preview-lines for JS');
   assert.ok(html.includes('class="postscript-content"'), 'content must be wrapped in .postscript-content');
-  assert.ok(html.includes('class="postscript-toggle"'), 'must include the .postscript-toggle label');
-  assert.ok(/<label[^>]*class="postscript-toggle"[^>]*for="([^"]+)"/.test(html), 'label must reference the checkbox id via for=');
+  assert.ok(html.includes('class="postscript-toggle"'), 'must include the .postscript-toggle button');
+  assert.ok(/<button[^>]*class="postscript-toggle"[^>]*aria-controls="([^"]+)"/.test(html), 'toggle button must reference the content id via aria-controls');
 });
 
 test('postscript with no params defaults to preview ON with 5 lines', () => {
@@ -418,20 +418,19 @@ test('postscript with no params defaults to preview ON with 5 lines', () => {
   ]);
   const html = renderFragment(poemData, {});
 
-  assert.ok(html.includes('class="postscript-toggle-cb hidden"'), 'default (no params) must still emit the toggle checkbox');
+  assert.ok(html.includes('type="button"'), 'default (no params) must still emit the button toggle');
   assert.ok(html.includes('--preview-lines: 5'), 'default preview-lines must be 5');
   assert.ok(html.includes('data-preview-lines="5"'), 'default data-preview-lines must be 5');
 });
 
-test('postscript with preview=false renders plain content with no checkbox/toggle', () => {
+test('postscript with preview=false renders plain content with no toggle', () => {
   const poemData = postscriptPoemData([
     { label: 'My Note', params: { preview: 'false' }, content: '<p>Some content</p>' },
   ]);
   const html = renderFragment(poemData, {});
 
-  assert.ok(!html.includes('postscript-toggle-cb'), 'preview=false must not emit the toggle checkbox');
   assert.ok(!html.includes('postscript-content'), 'preview=false must not wrap content in .postscript-content');
-  assert.ok(!html.includes('postscript-toggle'), 'preview=false must not emit the .postscript-toggle label');
+  assert.ok(!html.includes('postscript-toggle'), 'preview=false must not emit the .postscript-toggle button');
   assert.ok(html.includes('<p>Some content</p>'), 'content must still render in full');
 });
 
@@ -443,6 +442,60 @@ test('postscript with an invalid preview-lines value falls back to the default o
 
   assert.ok(html.includes('--preview-lines: 5'), 'non-numeric preview-lines must fall back to 5');
   assert.ok(html.includes('data-preview-lines="5"'), 'non-numeric preview-lines must fall back to 5');
+});
+
+// ── analysis show/hide + synopsis/full toggle ───────────────────────────────
+
+// Minimal poemData for exercising the analysis toggle directly.
+function analysisPoemData(analysis) {
+  return {
+    title: 'Analysis Poem',
+    author: 'Test Author',
+    date: '1970-01-31',
+    slug: 'analysis-poem',
+    versions: [{ segments: [{ lines: 'Hello world\n' }] }],
+    analysis,
+  };
+}
+
+test('analysis show/hide controls use aria-expanded/aria-controls/data-* instead of onclick', () => {
+  const poemData = analysisPoemData({ full: '<p>Full text</p>' });
+  const html = renderFragment(poemData, {});
+
+  assert.ok(!html.includes('onclick'), 'analysis controls must have NO onclick attribute');
+  assert.ok(
+    html.includes('class="analysis show" id="show-analysis--analysis-poem" type="button" aria-expanded="false" aria-controls="analysis--analysis-poem"'),
+    'show button must carry aria-expanded="false" and aria-controls pointing at the analysis div'
+  );
+  assert.ok(
+    html.includes('class="analysis hide" id="hide-analysis--analysis-poem" type="button" data-analysis-toggle="show-analysis--analysis-poem"'),
+    'hide button must reference the show button via data-analysis-toggle'
+  );
+});
+
+test('analysis synopsis/full selector uses aria-pressed/data-* instead of onclick', () => {
+  const poemData = analysisPoemData({ synopsis: '<p>Short</p>', full: '<p>Long</p>' });
+  const html = renderFragment(poemData, {});
+
+  assert.ok(!html.includes('onclick'), 'selector buttons must have NO onclick attribute');
+  assert.ok(html.includes('class="full-or-synopsis-selector" data-selected="synopsis"'), 'selector wrapper must default to data-selected="synopsis"');
+  assert.ok(
+    html.includes('id="analysis-select-syno--analysis-poem" type="button" aria-pressed="true" data-analysis-select="synopsis"'),
+    'synopsis selector button must start aria-pressed="true"'
+  );
+  assert.ok(
+    html.includes('id="analysis-select-full--analysis-poem" type="button" aria-pressed="false" data-analysis-select="full"'),
+    'full selector button must start aria-pressed="false"'
+  );
+  assert.ok(
+    html.includes('class="analysis-panel" id="analysis-syno--analysis-poem" data-analysis-panel="synopsis"'),
+    'synopsis panel must carry data-analysis-panel="synopsis"'
+  );
+  assert.ok(
+    html.includes('class="analysis-panel" id="analysis-full--analysis-poem" data-analysis-panel="full"'),
+    'full panel must carry data-analysis-panel="full"'
+  );
+  assert.ok(!html.includes('class="hidden"'), 'no panel should rely on the .hidden utility class any more; visibility is CSS-attribute-selector-driven');
 });
 
 // ── slug derivation ──────────────────────────────────────────────────────────

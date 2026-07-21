@@ -26,6 +26,13 @@
  *   updatePost(blogId, token, postId, post)
  *   revertPost(blogId, token, postId)
  *   deletePost(blogId, token, postId)
+ *   fetchWithRetry(url, init, options)                - shared fetch wrapper: per-request timeout +
+ *                                                       single retry on 429/5xx or network rejection,
+ *                                                       unless options.retryable is false
+ *   syncPoem({ existing, desired, isoDate, blogId, token, dryRun })
+ *                                                     - create/update/skip decision for one poem
+ *   processRemovals({ posts, currentSlugs, label, removedMode, blogId, token, dryRun })
+ *                                                     - the removal-pass loop (draft/delete/keep)
  */
 
 'use strict';
@@ -39,6 +46,7 @@ const { REPO_ROOT } = require('./repo-root');
 const YAML_DIR = path.join(REPO_ROOT, 'src', 'poems', 'yaml');
 const BLOGGER_API = 'https://www.googleapis.com/blogger/v3';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
+const FETCH_TIMEOUT_MS = 30_000;
 
 // ── Pure helpers ──────────────────────────────────────────────────────────────
 
@@ -85,11 +93,23 @@ function resolveConfig(config, env, credentialsPath = path.resolve('.blogger-cre
   const blogId = blogger.blog_id != null ? String(blogger.blog_id) : undefined;
 
   const VALID_REMOVED = ['draft', 'delete', 'keep'];
+  if (blogger.removed != null && !VALID_REMOVED.includes(blogger.removed)) {
+    console.warn(
+      `Warning: blogger.removed was "${blogger.removed}", which is not one of ` +
+      `${VALID_REMOVED.join(', ')}. Falling back to the default "draft".`
+    );
+  }
   const removed = VALID_REMOVED.includes(blogger.removed)
     ? blogger.removed
     : 'draft';
 
   const VALID_CONTENT = ['full', 'poem'];
+  if (blogger.content != null && !VALID_CONTENT.includes(blogger.content)) {
+    console.warn(
+      `Warning: blogger.content was "${blogger.content}", which is not one of ` +
+      `${VALID_CONTENT.join(', ')}. Falling back to the default "full".`
+    );
+  }
   const content = VALID_CONTENT.includes(blogger.content)
     ? blogger.content
     : 'full';
@@ -99,6 +119,14 @@ function resolveConfig(config, env, credentialsPath = path.resolve('.blogger-cre
   // Load fallback values from the credentials file if any env var is absent.
   let fileCredentials = {};
   if (credentialsPath && fs.existsSync(credentialsPath)) {
+    const mode = fs.statSync(credentialsPath).mode & 0o777;
+    if (mode & 0o077) {
+      console.warn(
+        `Warning: ${credentialsPath} is readable/writable by group or other ` +
+        `(mode ${mode.toString(8)}). It should be 0600 (owner read/write only) — ` +
+        `run: chmod 600 ${credentialsPath}`
+      );
+    }
     try {
       const raw = fs.readFileSync(credentialsPath, 'utf8');
       const parsed = JSON.parse(raw) || {};
@@ -355,17 +383,38 @@ async function assertOk(response, context) {
 }
 
 /**
- * fetch() with a single retry after a short delay if the response is 429 or 5xx.
+ * fetch() with a per-request timeout and a single retry after a short delay.
+ *
+ * Retries once when the response is 429/5xx, or when the request itself
+ * rejects — a network-level failure (DNS, connection reset) or the timeout
+ * above firing. Only the first attempt's failure is retried; a failure on
+ * the retry itself is returned/thrown as-is.
+ *
+ * Pass `retryable: false` for non-idempotent calls (e.g. `createPost`):
+ * a rejected request may have reached the server and been processed even
+ * though the client never saw the response, so retrying it risks creating
+ * a second live resource. With `retryable: false` the first attempt's
+ * result — success, failure response, or thrown rejection — is returned
+ * or thrown as-is, never retried.
  *
  * @param {string} url
  * @param {object} [init] - fetch init options
+ * @param {{ retryable?: boolean }} [options]
  * @returns {Promise<Response>}
  */
-async function fetchWithRetry(url, init) {
-  const response = await fetch(url, init);
-  if (response.status !== 429 && response.status < 500) return response;
+async function fetchWithRetry(url, init, { retryable = true } = {}) {
+  const attempt = () => fetch(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  let response;
+  try {
+    response = await attempt();
+  } catch (err) {
+    if (!retryable) throw err;
+    await new Promise(resolve => setTimeout(resolve, 500));
+    return attempt();
+  }
+  if (!retryable || (response.status !== 429 && response.status < 500)) return response;
   await new Promise(resolve => setTimeout(resolve, 500));
-  return fetch(url, init);
+  return attempt();
 }
 
 /**
@@ -410,6 +459,7 @@ async function listAccessibleBlogs(token) {
   try {
     const response = await fetch(`${BLOGGER_API}/users/self/blogs`, {
       headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (response.status === 403) return { recognised: false, blogs: [] };
     if (!response.ok) return { recognised: true, blogs: [] };
@@ -457,20 +507,31 @@ async function listAllPosts(blogId, token) {
 /**
  * Create a new post on Blogger.
  *
+ * Not idempotent — a lost response after the server has already created
+ * the post would make an automatic retry create a duplicate — so this
+ * call opts out of `fetchWithRetry`'s rejection-retry (see its doc
+ * comment). A failed create surfaces as a normal error for this poem;
+ * the tool is safely re-runnable, so a subsequent sync run sees the poem
+ * as still missing and tries again.
+ *
  * @param {string} blogId
  * @param {string} token
  * @param {object} post
  * @returns {Promise<object>}
  */
 async function createPost(blogId, token, post) {
-  const response = await fetchWithRetry(`${BLOGGER_API}/blogs/${blogId}/posts/`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
+  const response = await fetchWithRetry(
+    `${BLOGGER_API}/blogs/${blogId}/posts/`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(post),
     },
-    body: JSON.stringify(post),
-  });
+    { retryable: false }
+  );
   await assertOk(response, 'createPost');
   return response.json();
 }
@@ -715,6 +776,107 @@ async function diagnoseBloggerFailure(err, { blogId, token } = {}) {
   });
 }
 
+/**
+ * Decide and perform the create/update/skip action for one poem.
+ *
+ * Blogger derives a new post's permalink from its title + publish date, and
+ * that permalink is sticky. Prepend the zero-padded day to the title just
+ * for creation (so the permalink bakes in the date), then rename the post
+ * back to its plain title immediately afterwards.
+ *
+ * @param {object} params
+ * @param {object|undefined} params.existing - existing Blogger post for this poem's slug, if any
+ * @param {object} params.desired            - desired post body from composePost()
+ * @param {string} params.isoDate            - poem's ISO date (YYYY-MM-DD), for the dated-title trick
+ * @param {string} params.blogId
+ * @param {string} params.token
+ * @param {boolean} params.dryRun
+ * @returns {Promise<'created'|'updated'|'unchanged'>}
+ */
+async function syncPoem({ existing, desired, isoDate, blogId, token, dryRun }) {
+  if (!existing) {
+    const day = isoDate.slice(8, 10);
+    const datedTitle = `${day} ${desired.title}`;
+    if (dryRun) {
+      console.log(`[create] "${datedTitle}" → rename to "${desired.title}"`);
+    } else {
+      const createdPost = await createPost(blogId, token, { ...desired, title: datedTitle });
+      await updatePost(blogId, token, createdPost.id, {
+        kind: desired.kind,
+        title: desired.title,
+        content: desired.content,
+        labels: desired.labels,
+        published: desired.published,
+      });
+      console.log(`Created: ${desired.title}`);
+    }
+    return 'created';
+  }
+
+  if (postNeedsUpdate(existing, desired)) {
+    const updateBody = {
+      kind: desired.kind,
+      title: desired.title,
+      content: desired.content,
+      labels: desired.labels,
+      published: desired.published,
+    };
+    if (dryRun) {
+      console.log(`[update] ${desired.title}`);
+    } else {
+      await updatePost(blogId, token, existing.id, updateBody);
+      console.log(`Updated: ${desired.title}`);
+    }
+    return 'updated';
+  }
+
+  if (dryRun) {
+    console.log(`[skip] ${desired.title}`);
+  }
+  return 'unchanged';
+}
+
+/**
+ * Run the removal pass: draft, delete, or (for 'keep') ignore each post
+ * selected as removed — LIVE, labelled, but no longer among the current
+ * poem slugs.
+ *
+ * @param {object} params
+ * @param {object[]} params.posts          - all posts fetched from Blogger
+ * @param {Set<string>} params.currentSlugs - slugs of current poems
+ * @param {string} params.label            - the label that marks managed posts
+ * @param {string} params.removedMode      - 'draft' | 'delete' | 'keep'
+ * @param {string} params.blogId
+ * @param {string} params.token
+ * @param {boolean} params.dryRun
+ * @returns {Promise<number>} count of posts drafted or deleted
+ */
+async function processRemovals({ posts, currentSlugs, label, removedMode, blogId, token, dryRun }) {
+  const removed = selectRemoved(posts, currentSlugs, label);
+  let handled = 0;
+  for (const post of removed) {
+    if (removedMode === 'draft') {
+      if (dryRun) {
+        console.log(`[draft] ${post.title}`);
+      } else {
+        await revertPost(blogId, token, post.id);
+        console.log(`Drafted: ${post.title}`);
+      }
+      handled++;
+    } else if (removedMode === 'delete') {
+      if (dryRun) {
+        console.log(`[delete] ${post.title}`);
+      } else {
+        await deletePost(blogId, token, post.id);
+        console.log(`Deleted: ${post.title}`);
+      }
+      handled++;
+    }
+    // 'keep' → do nothing
+  }
+  return handled;
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 /**
@@ -798,49 +960,17 @@ async function main() {
       currentSlugs.add(data.slug);
 
       const existing = bySlug.get(data.slug);
-
-      if (!existing) {
-        // Blogger derives a new post's permalink from its title + publish date,
-        // and that permalink is sticky. Prepend the zero-padded day to the title
-        // just for creation (so the permalink bakes in the date), then rename
-        // the post back to its plain title immediately afterwards.
-        const day = isoDate.slice(8, 10);
-        const datedTitle = `${day} ${desired.title}`;
-        if (args.dryRun) {
-          console.log(`[create] "${datedTitle}" → rename to "${desired.title}"`);
-        } else {
-          const createdPost = await createPost(opts.blogId, token, { ...desired, title: datedTitle });
-          await updatePost(opts.blogId, token, createdPost.id, {
-            kind: desired.kind,
-            title: desired.title,
-            content: desired.content,
-            labels: desired.labels,
-            published: desired.published,
-          });
-          console.log(`Created: ${desired.title}`);
-        }
-        created++;
-      } else if (postNeedsUpdate(existing, desired)) {
-        const updateBody = {
-          kind: desired.kind,
-          title: desired.title,
-          content: desired.content,
-          labels: desired.labels,
-          published: desired.published,
-        };
-        if (args.dryRun) {
-          console.log(`[update] ${data.title}`);
-        } else {
-          await updatePost(opts.blogId, token, existing.id, updateBody);
-          console.log(`Updated: ${data.title}`);
-        }
-        updated++;
-      } else {
-        if (args.dryRun) {
-          console.log(`[skip] ${data.title}`);
-        }
-        unchanged++;
-      }
+      const outcome = await syncPoem({
+        existing,
+        desired,
+        isoDate,
+        blogId: opts.blogId,
+        token,
+        dryRun: args.dryRun,
+      });
+      if (outcome === 'created') created++;
+      else if (outcome === 'updated') updated++;
+      else unchanged++;
     }
 
     // Handle removed poems — only on a full sync. With --only, the loop above
@@ -850,27 +980,15 @@ async function main() {
     if (args.only) {
       console.log(`Skipping removal pass (--only ${args.only}): removals are only computed on a full sync.`);
     } else {
-      const removed = selectRemoved(posts, currentSlugs, opts.label);
-      for (const post of removed) {
-        if (opts.removed === 'draft') {
-          if (args.dryRun) {
-            console.log(`[draft] ${post.title}`);
-          } else {
-            await revertPost(opts.blogId, token, post.id);
-            console.log(`Drafted: ${post.title}`);
-          }
-          handled++;
-        } else if (opts.removed === 'delete') {
-          if (args.dryRun) {
-            console.log(`[delete] ${post.title}`);
-          } else {
-            await deletePost(opts.blogId, token, post.id);
-            console.log(`Deleted: ${post.title}`);
-          }
-          handled++;
-        }
-        // 'keep' → do nothing
-      }
+      handled = await processRemovals({
+        posts,
+        currentSlugs,
+        label: opts.label,
+        removedMode: opts.removed,
+        blogId: opts.blogId,
+        token,
+        dryRun: args.dryRun,
+      });
     }
 
     const dryRunSuffix = args.dryRun ? ' (dry-run)' : '';
@@ -910,10 +1028,13 @@ module.exports = {
   BloggerApiError,
   diagnoseBloggerFailure,
   listAccessibleBlogs,
+  fetchWithRetry,
   getAccessToken,
   listAllPosts,
   createPost,
   updatePost,
   revertPost,
   deletePost,
+  syncPoem,
+  processRemovals,
 };
