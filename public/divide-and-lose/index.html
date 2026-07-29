@@ -16,7 +16,7 @@
     <nav class="poem-page-nav"><a href="../">← Poems</a> ·&nbsp;<a
         href="../all-poems.html">All Poems</a></nav>
     <div class="poem-section" id="poem-divide-and-lose">
-      <h2 class="poem-title">Divide and Lose</h2>
+      <h1 class="poem-title">Divide and Lose</h1>
       <div class="poem-content">
         <div id="poem--divide-and-lose">
           <div class="poem-info"><span class="title"
@@ -79,22 +79,24 @@
             </div>
           </div><button class="analysis show"
             id="show-analysis--divide-and-lose" type="button"
-            onclick="document.getElementById('analysis--divide-and-lose').style.display = 'block'; document.getElementById('show-analysis--divide-and-lose').style.display = 'none';">Show
+            aria-expanded="false" aria-controls="analysis--divide-and-lose">Show
             analysis</button>
           <div class="analysis" id="analysis--divide-and-lose"><button
               class="analysis hide" id="hide-analysis--divide-and-lose"
               type="button"
-              onclick="document.getElementById('analysis--divide-and-lose').style.display = 'none'; document.getElementById('show-analysis--divide-and-lose').style.display = 'block';">Hide
+              data-analysis-toggle="show-analysis--divide-and-lose">Hide
               analysis</button>
-            <div class="full-or-synopsis-selector"><button
-                class="analysis selector selected"
+            <div class="full-or-synopsis-selector" data-selected="synopsis">
+              <button class="analysis selector"
                 id="analysis-select-syno--divide-and-lose" type="button"
-                onclick="el = name =&gt; document.getElementById('analysis-' + name + '--divide-and-lose'); el('full').style.display = 'none'; el('syno').style.display = 'block'; el('select-full').classList.remove('selected'); el('select-syno').classList.add('selected');">Synopsis</button><button
+                aria-pressed="true"
+                data-analysis-select="synopsis">Synopsis</button><button
                 class="analysis selector"
                 id="analysis-select-full--divide-and-lose" type="button"
-                onclick="el = name =&gt; document.getElementById('analysis-' + name + '--divide-and-lose'); el('full').style.display = 'block'; el('syno').style.display = 'none'; el('select-full').classList.add('selected'); el('select-syno').classList.remove('selected');">Full
+                aria-pressed="false" data-analysis-select="full">Full
                 Analysis</button></div>
-            <div id="analysis-syno--divide-and-lose">
+            <div class="analysis-panel" id="analysis-syno--divide-and-lose"
+              data-analysis-panel="synopsis">
               <h2>Analysis of <em>Divide and Lose</em> (synopsis)</h2>
               <p>“Divide and Lose” by Warwick Allen emerges as a sophisticated
                 response to contemporary political fragmentation, written
@@ -145,7 +147,8 @@
                 spiritual renewal over continued division, encompassing both
                 personal conversion and evangelistic responsibility.</p>
             </div>
-            <div class="hidden" id="analysis-full--divide-and-lose">
+            <div class="analysis-panel" id="analysis-full--divide-and-lose"
+              data-analysis-panel="full">
               <h2>Analysis of <em>Divide and Lose</em></h2>
               <h3>Introduction</h3>
               <p>“Divide and Lose” emerges as a solemn meditation on

@@ -16,7 +16,7 @@
     <nav class="poem-page-nav"><a href="../">← Poems</a> ·&nbsp;<a
         href="../all-poems.html">All Poems</a></nav>
     <div class="poem-section" id="poem-unreal-riddle">
-      <h2 class="poem-title">Unreal Riddle</h2>
+      <h1 class="poem-title">Unreal Riddle</h1>
       <div class="poem-content">
         <div id="poem--unreal-riddle">
           <div class="poem-info"><span class="title"
@@ -136,13 +136,12 @@
               </div>
             </div>
           </div><button class="analysis show" id="show-analysis--unreal-riddle"
-            type="button"
-            onclick="document.getElementById('analysis--unreal-riddle').style.display = 'block'; document.getElementById('show-analysis--unreal-riddle').style.display = 'none';">Show
-            analysis</button>
+            type="button" aria-expanded="false"
+            aria-controls="analysis--unreal-riddle">Show analysis</button>
           <div class="analysis" id="analysis--unreal-riddle"><button
               class="analysis hide" id="hide-analysis--unreal-riddle"
               type="button"
-              onclick="document.getElementById('analysis--unreal-riddle').style.display = 'none'; document.getElementById('show-analysis--unreal-riddle').style.display = 'block';">Hide
+              data-analysis-toggle="show-analysis--unreal-riddle">Hide
               analysis</button>
             <h2>Analysis of <em>Unreal Riddle</em></h2>
             <h3>Introduction</h3>

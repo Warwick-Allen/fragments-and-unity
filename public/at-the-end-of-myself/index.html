@@ -16,7 +16,7 @@
     <nav class="poem-page-nav"><a href="../">← Poems</a> ·&nbsp;<a
         href="../all-poems.html">All Poems</a></nav>
     <div class="poem-section" id="poem-at-the-end-of-myself">
-      <h2 class="poem-title">At The End of Myself</h2>
+      <h1 class="poem-title">At The End of Myself</h1>
       <div class="poem-content">
         <div id="poem--at-the-end-of-myself">
           <div class="poem-info"><span class="title"
@@ -131,12 +131,13 @@
             </script>
           </div><button class="analysis show"
             id="show-analysis--at-the-end-of-myself" type="button"
-            onclick="document.getElementById('analysis--at-the-end-of-myself').style.display = 'block'; document.getElementById('show-analysis--at-the-end-of-myself').style.display = 'none';">Show
+            aria-expanded="false"
+            aria-controls="analysis--at-the-end-of-myself">Show
             analysis</button>
           <div class="analysis" id="analysis--at-the-end-of-myself"><button
               class="analysis hide" id="hide-analysis--at-the-end-of-myself"
               type="button"
-              onclick="document.getElementById('analysis--at-the-end-of-myself').style.display = 'none'; document.getElementById('show-analysis--at-the-end-of-myself').style.display = 'block';">Hide
+              data-analysis-toggle="show-analysis--at-the-end-of-myself">Hide
               analysis</button>
             <h2>Analysis of <em>At The End of Myself</em></h2>
             <p>The song <em>At the End of Myself</em> is a poignant exploration
