@@ -16,7 +16,7 @@
     <nav class="poem-page-nav"><a href="../">← Poems</a> ·&nbsp;<a
         href="../all-poems.html">All Poems</a></nav>
     <div class="poem-section" id="poem-time-of-seven">
-      <h2 class="poem-title">Time of Seven</h2>
+      <h1 class="poem-title">Time of Seven</h1>
       <div class="poem-content">
         <div id="poem--time-of-seven">
           <div class="poem-info"><span class="title"
@@ -127,13 +127,12 @@
               </div>
             </div>
           </div><button class="analysis show" id="show-analysis--time-of-seven"
-            type="button"
-            onclick="document.getElementById('analysis--time-of-seven').style.display = 'block'; document.getElementById('show-analysis--time-of-seven').style.display = 'none';">Show
-            analysis</button>
+            type="button" aria-expanded="false"
+            aria-controls="analysis--time-of-seven">Show analysis</button>
           <div class="analysis" id="analysis--time-of-seven"><button
               class="analysis hide" id="hide-analysis--time-of-seven"
               type="button"
-              onclick="document.getElementById('analysis--time-of-seven').style.display = 'none'; document.getElementById('show-analysis--time-of-seven').style.display = 'block';">Hide
+              data-analysis-toggle="show-analysis--time-of-seven">Hide
               analysis</button>
             <h2>Analysis of <em>Time of Seven</em></h2>
             <h3>Analysis of “Time of Seven”</h3>

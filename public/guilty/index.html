@@ -16,7 +16,7 @@
     <nav class="poem-page-nav"><a href="../">← Poems</a> ·&nbsp;<a
         href="../all-poems.html">All Poems</a></nav>
     <div class="poem-section" id="poem-guilty">
-      <h2 class="poem-title">Guilty</h2>
+      <h1 class="poem-title">Guilty</h1>
       <div class="poem-content">
         <div id="poem--guilty">
           <div class="poem-info"><span class="title"
@@ -77,12 +77,11 @@
               </div>
             </div>
           </div><button class="analysis show" id="show-analysis--guilty"
-            type="button"
-            onclick="document.getElementById('analysis--guilty').style.display = 'block'; document.getElementById('show-analysis--guilty').style.display = 'none';">Show
-            analysis</button>
+            type="button" aria-expanded="false"
+            aria-controls="analysis--guilty">Show analysis</button>
           <div class="analysis" id="analysis--guilty"><button
               class="analysis hide" id="hide-analysis--guilty" type="button"
-              onclick="document.getElementById('analysis--guilty').style.display = 'none'; document.getElementById('show-analysis--guilty').style.display = 'block';">Hide
+              data-analysis-toggle="show-analysis--guilty">Hide
               analysis</button>
             <h2>Analysis of <em>Guilty</em></h2>
             <p>The contemporary poem “Guilty” is an exploration of
