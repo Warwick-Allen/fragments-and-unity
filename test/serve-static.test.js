@@ -31,6 +31,8 @@ const os = require('os');
 const path = require('path');
 const Module = require('module');
 const http = require('http');
+const crypto = require('crypto');
+const { spawn } = require('child_process');
 
 const SERVE_STATIC_PATH = path.join(__dirname, '..', 'src', 'tools', 'serve-static.js');
 const PATH_GUARD_PATH = path.join(path.dirname(SERVE_STATIC_PATH), 'path-guard.js');
@@ -76,6 +78,17 @@ function loadServeStaticInternals(dirForStartupCheck, extraArgs = [], { pathGuar
       }
     }
   }
+}
+
+function getFreePort() {
+  return new Promise((resolve, reject) => {
+    const srv = http.createServer();
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const { port } = srv.address();
+      srv.close(() => resolve(port));
+    });
+  });
 }
 
 function withTempDir(fn) {
@@ -336,5 +349,214 @@ test('request handler: returns 403 when the traversal guard trips on the directo
 
     assert.strictEqual(res.statusCode, 403);
     assert.strictEqual(res.body, 'Forbidden');
+  });
+});
+
+test('request handler: returns 403 for a symlink committed inside root whose target resolves outside it', async () => {
+  // No pathGuardOverrides here — this exercises the real path-guard.js
+  // against a genuine on-disk symlink, the scenario TD26072801 fixed
+  // (e.g. public/theme.html -> /etc/passwd, published verbatim).
+  await withTempDirAsync(async (dir) => {
+    const root = fs.realpathSync(dir);
+    const outsideFile = path.join(root, '..', `serve-static-secret-${crypto.randomUUID()}.txt`);
+    fs.writeFileSync(outsideFile, 'top secret');
+    fs.symlinkSync(outsideFile, path.join(root, 'linked.txt'));
+    const { requestHandler } = loadServeStaticInternals(root);
+
+    try {
+      const res = await withRunningServer(requestHandler, (port) => httpGet(port, '/linked.txt'));
+      assert.strictEqual(res.statusCode, 403);
+      assert.strictEqual(res.body, 'Forbidden');
+    } finally {
+      fs.rmSync(outsideFile, { force: true });
+    }
+  });
+});
+
+test('request handler: still answers 404 for a request path that does not exist on disk', async () => {
+  // A missing target can't be resolved by realpath (ENOENT), so the
+  // symlink-aware containment check must fall back to its lexical result
+  // rather than crash — the existing fileExists() check downstream is what
+  // turns "not found" into a 404.
+  await withTempDirAsync(async (dir) => {
+    const { requestHandler } = loadServeStaticInternals(dir);
+
+    const res = await withRunningServer(requestHandler, (port) => httpGet(port, '/no-such-file.txt'));
+
+    assert.strictEqual(res.statusCode, 404);
+    assert.strictEqual(res.body, 'Not Found');
+  });
+});
+
+test('request handler: a directory index.html symlinked out of root is not served, and the listing is generated instead', async () => {
+  // The traversal guard on a directory request clears the *directory*; the
+  // index.html served in its place is a separate path and needs its own
+  // containment check, or a symlinked public/sub/index.html rides in on the
+  // directory's clearance.
+  await withTempDirAsync(async (dir) => {
+    const root = fs.realpathSync(dir);
+    const outsideFile = path.join(root, '..', `serve-static-secret-${crypto.randomUUID()}.txt`);
+    fs.writeFileSync(outsideFile, 'top secret');
+    fs.mkdirSync(path.join(root, 'sub'));
+    fs.symlinkSync(outsideFile, path.join(root, 'sub', 'index.html'));
+    const { requestHandler } = loadServeStaticInternals(root);
+
+    try {
+      const res = await withRunningServer(requestHandler, (port) => httpGet(port, '/sub/'));
+      assert.strictEqual(res.statusCode, 200);
+      assert.doesNotMatch(res.body, /top secret/);
+      assert.match(res.body, /Directory Listing/);
+      // The listing may name the symlink (requesting it 403s), but must not
+      // stat through it: printing the resolved target's size ("10 B" for the
+      // ten-byte outside file) would leak metadata about a file the server
+      // just declined to serve.
+      assert.match(res.body, /index\.html/);
+      assert.doesNotMatch(res.body, /class="size"/);
+    } finally {
+      fs.rmSync(outsideFile, { force: true });
+    }
+  });
+});
+
+test('request handler: the SPA fallback does not serve a root index.html symlinked out of root', async () => {
+  // ROOT_DIR/index.html is synthesised for the fallback rather than derived
+  // from the request, so it bypasses the guard applied to request paths and
+  // has to be checked where it is built.
+  await withTempDirAsync(async (dir) => {
+    const root = fs.realpathSync(dir);
+    const outsideFile = path.join(root, '..', `serve-static-secret-${crypto.randomUUID()}.txt`);
+    fs.writeFileSync(outsideFile, 'top secret');
+    fs.symlinkSync(outsideFile, path.join(root, 'index.html'));
+    const { requestHandler } = loadServeStaticInternals(root);
+
+    try {
+      const res = await withRunningServer(requestHandler, (port) => httpGet(port, '/some/route'));
+      assert.strictEqual(res.statusCode, 404);
+      assert.strictEqual(res.body, 'Not Found');
+    } finally {
+      fs.rmSync(outsideFile, { force: true });
+    }
+  });
+});
+
+/*
+ * Graceful-shutdown tests below spawn the real serve-static.js as a child
+ * process, rather than using the throwaway-Module technique above — that
+ * technique stubs `http.createServer`'s `listen`/`close` away entirely
+ * (see loadServeStaticInternals) and so can't exercise a real signal
+ * reaching a real `process.exit`. TD26072619: before this fix, `npm run
+ * stop`'s bare SIGTERM terminated the process immediately, mid-response.
+ */
+
+function waitForServerReady(child) {
+  return new Promise((resolve, reject) => {
+    let output = '';
+    const onData = (chunk) => {
+      output += chunk;
+      if (output.includes('Serving ')) {
+        child.stdout.removeListener('data', onData);
+        resolve();
+      }
+    };
+    child.stdout.on('data', onData);
+    child.once('error', reject);
+    child.once('exit', (code, signal) =>
+      reject(new Error(`server exited before it was ready (code ${code}, signal ${signal})`))
+    );
+  });
+}
+
+function waitForExit(child) {
+  return new Promise((resolve) => {
+    child.once('exit', (code, signal) => resolve({ code, signal }));
+  });
+}
+
+test('SIGTERM (the signal `npm run stop` sends) lets an in-flight response finish and exits cleanly', async () => {
+  await withTempDirAsync(async (dir) => {
+    // Large enough that the file is still streaming out (not yet fully
+    // buffered/flushed) when SIGTERM arrives, so this exercises a request
+    // that's genuinely in-flight. An earlier version of this test sent the
+    // signal between two requests on an idle keep-alive socket instead —
+    // `server.close()` only guarantees to drain connections with an active
+    // request, not idle ones, so that version flaked (~15% locally) on
+    // whichever side of the close() the client's next request happened to
+    // land.
+    const content = crypto.randomBytes(5 * 1024 * 1024);
+    fs.writeFileSync(path.join(dir, 'big.bin'), content);
+    const port = await getFreePort();
+
+    const child = spawn(
+      process.execPath,
+      [SERVE_STATIC_PATH, '--port', String(port), '--dir', dir, '--host', '127.0.0.1'],
+      { stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+
+    try {
+      await waitForServerReady(child);
+
+      const response = await new Promise((resolve, reject) => {
+        const req = http.request(
+          { host: '127.0.0.1', port, path: '/big.bin', method: 'GET' },
+          (res) => {
+            // Headers have arrived but the body is still streaming; signal
+            // now so the shutdown handler races the in-flight response,
+            // not a request that hasn't been sent yet.
+            child.kill('SIGTERM');
+            const chunks = [];
+            res.on('data', (chunk) => chunks.push(chunk));
+            res.on('end', () =>
+              resolve({ statusCode: res.statusCode, body: Buffer.concat(chunks) })
+            );
+            res.on('error', reject);
+          }
+        );
+        req.on('error', reject);
+        req.end();
+      });
+
+      // A regression back to abrupt termination would truncate this body
+      // instead of letting the stream finish.
+      assert.strictEqual(response.statusCode, 200);
+      assert.ok(response.body.equals(content));
+
+      const { code, signal } = await waitForExit(child);
+
+      // A graceful `server.close()` shutdown calls `process.exit(0)`; a
+      // process killed abruptly by the signal itself would instead report
+      // code null and the signal's name.
+      assert.strictEqual(code, 0);
+      assert.strictEqual(signal, null);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGKILL');
+      }
+    }
+  });
+});
+
+test('SIGINT exits cleanly via the same graceful shutdown path', async () => {
+  await withTempDirAsync(async (dir) => {
+    fs.writeFileSync(path.join(dir, 'hello.txt'), 'hello world');
+    const port = await getFreePort();
+
+    const child = spawn(
+      process.execPath,
+      [SERVE_STATIC_PATH, '--port', String(port), '--dir', dir, '--host', '127.0.0.1'],
+      { stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+
+    try {
+      await waitForServerReady(child);
+      child.kill('SIGINT');
+      const { code, signal } = await waitForExit(child);
+
+      assert.strictEqual(code, 0);
+      assert.strictEqual(signal, null);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGKILL');
+      }
+    }
   });
 });

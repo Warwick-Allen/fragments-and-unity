@@ -11,11 +11,10 @@
 
 const fs = require('fs');
 const path = require('path');
-const yaml = require('js-yaml');
 const { slugFromFile } = require('./slugify');
 const { parseDateForSorting, formatDateForDisplay, toISODate } = require('./date-utils');
 const { readPoeticConfig, CONFIG_FILENAME } = require('./poetic-config');
-const { loadPoemData, renderFragment, listPoemYamlFiles, refFilesForPoem, FRAGMENT_TEMPLATE } = require('./poem-render');
+const { loadPoemData, renderFragment, listPoemYamlFiles, refFilesForPoem, readYamlCached, FRAGMENT_TEMPLATE } = require('./poem-render');
 const { hasResolvableSongs } = require('./song-handlers');
 const { renderTitleMarkup, BEAUTIFY_OPTIONS } = require('./render-core');
 const { renderFooter, upsertFooter, resolveFooterSourcePath } = require('./footer');
@@ -54,12 +53,16 @@ function copyDateUtilsAsset(publicDir) {
  *   src/poems/yaml (tests only; the npm run build / CLI entry point below
  *   always uses the default) — see the matching option on buildAllPoems() in
  *   build-poems.js.
+ * @param {Map<string, *>} [options.yamlCache] - Shared parse cache passed in
+ *   by main() so a poem's YAML parsed for the staleness-check sources set or
+ *   generateIndexHtml() isn't parsed again here; see readYamlCached() in
+ *   poem-render.js. Defaults to a private, call-scoped cache when omitted.
  */
 function concatenateAllHtmlFiles(
   dirPath,
   favicon = 'poetic-logo.svg',
   config = {},
-  { poemsDir = path.join(REPO_ROOT, 'src', 'poems', 'yaml') } = {}
+  { poemsDir = path.join(REPO_ROOT, 'src', 'poems', 'yaml'), yamlCache = new Map() } = {}
 ) {
   try {
     const siteTitle = escapeAmpersand(config.title || 'My Poems');
@@ -72,8 +75,7 @@ function concatenateAllHtmlFiles(
       const yamlPath = path.join(poemsDir, file);
 
       try {
-        const yamlContent = fs.readFileSync(yamlPath, 'utf8');
-        const data = yaml.load(yamlContent);
+        const data = readYamlCached(yamlPath, yamlCache);
 
         const title = data.title;
         if (!title) {
@@ -114,7 +116,7 @@ function concatenateAllHtmlFiles(
     const entries = [];
     poemData.forEach((poem) => {
       try {
-        const poemDataObj = loadPoemData(poem.yamlPath);
+        const poemDataObj = loadPoemData(poem.yamlPath, yamlCache);
         if (!poemDataObj) {
           throw new Error(`Failed to load poem data from ${poem.yamlPath}`);
         }
@@ -138,6 +140,93 @@ function concatenateAllHtmlFiles(
 }
 
 /**
+ * Find a balanced HTML element by its opening tag, returning byte offsets for
+ * its open tag, inner content, and closing tag. Tracks the nesting depth of
+ * same-named tags rather than matching a single fixed-shape regex against the
+ * whole document, so it finds the *matching* close tag through nested
+ * same-named children and regardless of indentation or line breaks — needed
+ * because selfHealLandmarks (below) runs against previously-built HTML whose
+ * exact formatting this codebase doesn't control.
+ *
+ * @param {string} html
+ * @param {RegExp} openTagPattern - matches only the element's opening tag,
+ *   e.g. /<div class="container">/i
+ * @param {string} tagName - the element name (e.g. "div"), used to track
+ *   nesting depth
+ * @returns {{start: number, openEnd: number, closeStart: number, end: number}|null}
+ */
+function findBalancedBlock(html, openTagPattern, tagName) {
+  const openMatch = openTagPattern.exec(html);
+  if (!openMatch) return null;
+
+  const start = openMatch.index;
+  const openEnd = start + openMatch[0].length;
+  const tagRe = new RegExp(`<${tagName}\\b[^>]*>|</${tagName}\\s*>`, 'gi');
+  tagRe.lastIndex = openEnd;
+
+  let depth = 1;
+  let match;
+  while ((match = tagRe.exec(html)) !== null) {
+    if (match[0][1] === '/') {
+      depth -= 1;
+      if (depth === 0) {
+        return { start, openEnd, closeStart: match.index, end: match.index + match[0].length };
+      }
+    } else {
+      depth += 1;
+    }
+  }
+  return null;
+}
+
+/**
+ * Self-heal the `<header>`/`<main>` landmarks TD26072616 (#129) added to the
+ * fresh-build template (renderFreshIndexHtml, aggregate-render-core.js) into
+ * an existing `public/index.html` that predates them, e.g. one a consumer
+ * repo tracks in git rather than treating as a build artefact — see
+ * TD26072902.
+ *
+ * Structural rather than regex-over-the-whole-document: it locates the
+ * `.container` wrapper and, within it, any `<div class="header">` block by
+ * tracking tag-nesting depth (findBalancedBlock above), so varied
+ * indentation or nested markup inside those elements doesn't throw it off
+ * the way a single fixed-shape regex would.
+ *
+ * Recognises only the shapes this framework itself has ever produced. If it
+ * can't find a `.container` wrapper at all — the body structure has been
+ * replaced by hand — it leaves the file untouched; `npm run a11y` still
+ * reports the missing landmarks non-blockingly rather than this silently
+ * misrewriting arbitrary hand-authored HTML.
+ *
+ * @param {string} html
+ * @returns {string}
+ */
+function selfHealLandmarks(html) {
+  let result = html;
+
+  if (!/<header[\s>]/i.test(result)) {
+    const headerDiv = findBalancedBlock(result, /<div class="header">/i, 'div');
+    if (headerDiv) {
+      const headerInner = result.slice(headerDiv.openEnd, headerDiv.closeStart);
+      result = `${result.slice(0, headerDiv.start)}<header class="header">${headerInner}</header>${result.slice(headerDiv.end)}`;
+    }
+  }
+
+  if (!/<main[\s>]/i.test(result)) {
+    const container = findBalancedBlock(result, /<div class="container">/i, 'div');
+    if (container) {
+      const inner = result.slice(container.openEnd, container.closeStart);
+      const headerBlock = findBalancedBlock(inner, /<header\b[^>]*>/i, 'header');
+      const prefix = headerBlock ? inner.slice(0, headerBlock.end) : '';
+      const rest = headerBlock ? inner.slice(headerBlock.end) : inner;
+      result = `${result.slice(0, container.openEnd)}${prefix}\n\n        <main>${rest}</main>\n    ${result.slice(container.closeStart)}`;
+    }
+  }
+
+  return result;
+}
+
+/**
  * Build or refresh index.html's poem-data JSON island (and, on an existing
  * file, sync favicon/title/subtitle and self-heal older formats).
  *
@@ -150,13 +239,17 @@ function concatenateAllHtmlFiles(
  *   src/poems/yaml (tests only; the npm run build / CLI entry point below
  *   always uses the default) — see the matching option on buildAllPoems() in
  *   build-poems.js.
+ * @param {Map<string, *>} [options.yamlCache] - Shared parse cache passed in
+ *   by main() so a poem's YAML parsed for the staleness-check sources set or
+ *   concatenateAllHtmlFiles() isn't parsed again here; see readYamlCached() in
+ *   poem-render.js. Defaults to a private, call-scoped cache when omitted.
  */
 function generateIndexHtml(
   publicDir,
   favicon = 'poetic-logo.svg',
   subtitle = undefined,
   config = {},
-  { poemsDir = path.join(REPO_ROOT, 'src', 'poems', 'yaml') } = {}
+  { poemsDir = path.join(REPO_ROOT, 'src', 'poems', 'yaml'), yamlCache = new Map() } = {}
 ) {
   try {
     // Read YAML files from the poems directory for metadata
@@ -168,8 +261,7 @@ function generateIndexHtml(
       const yamlPath = path.join(poemsDir, yamlFile);
 
       try {
-        const yamlContent = fs.readFileSync(yamlPath, 'utf8');
-        const data = yaml.load(yamlContent);
+        const data = readYamlCached(yamlPath, yamlCache);
 
         const title = data.title;
         if (!title) {
@@ -291,6 +383,9 @@ function generateIndexHtml(
           () => poemDataIsland
         );
       }
+
+      // Self-heal the <header>/<main> landmarks: see TD26072902.
+      indexContent = selfHealLandmarks(indexContent);
     } else {
       // Create a default index.html template
       const siteTitle = escapeAmpersand(config.title || 'My Poems');
@@ -364,9 +459,13 @@ function main() {
   // removals within the set are detected by comparing it against a sidecar
   // manifest (see needsRebuildAggregate), not by the directory's own mtime —
   // which not every filesystem or sync tool updates.
+  // Shared across the sources set below and the two generators further down,
+  // so each poem's YAML is parsed at most once per build (see
+  // readYamlCached() in poem-render.js) rather than once per site.
+  const yamlCache = new Map();
   const dirEntries = fs.readdirSync(poemsDir).map((f) => path.join(poemsDir, f));
   const refTargets = listPoemYamlFiles(poemsDir)
-    .flatMap((f) => refFilesForPoem(path.join(poemsDir, f)));
+    .flatMap((f) => refFilesForPoem(path.join(poemsDir, f), yamlCache));
   const sources = [...new Set([...dirEntries, ...refTargets])];
   const extraInputs = [
     FRAGMENT_TEMPLATE,
@@ -382,7 +481,7 @@ function main() {
   console.log('Step 1: Building all-poems.html...');
 
   const { html: allPoemsHtml, errorCount: poemErrorCount } =
-    concatenateAllHtmlFiles(publicDir, favicon, config);
+    concatenateAllHtmlFiles(publicDir, favicon, config, { yamlCache });
   const concatenatedContent = upsertFooter(allPoemsHtml, footerBlock);
 
   const prettifiedContent = beautify.html(concatenatedContent, BEAUTIFY_OPTIONS);
@@ -395,7 +494,7 @@ function main() {
 
   console.log('\nStep 2: Updating index.html...');
 
-  const updatedIndexContent = generateIndexHtml(publicDir, favicon, subtitle, config);
+  const updatedIndexContent = generateIndexHtml(publicDir, favicon, subtitle, config, { yamlCache });
   let indexErrorCount = 0;
   if (updatedIndexContent) {
     const finalIndexContent = upsertFooter(updatedIndexContent, footerBlock);
@@ -432,4 +531,6 @@ module.exports = {
   concatenateAllHtmlFiles,
   generateIndexHtml,
   copyDateUtilsAsset,
+  findBalancedBlock,
+  selfHealLandmarks,
 };
