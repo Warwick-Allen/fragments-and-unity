@@ -132,23 +132,28 @@ rebase onto the current `main` and push the fix.
 
 ## Tech debt
 
-When you defer work, take a shortcut, or notice a known gap, record it in `TECH-DEBT.md`
-at the repo root — do not leave it only in a commit message or in chat. Keep entries short
-and dated, and delete one when it is resolved.
+When you defer work, take a shortcut, or notice a known gap, record it in the tech-debt
+register — do not leave it only in a commit message or in chat. The register is per-item:
+one `tech-debt/<id>.md` file per record (YAML frontmatter plus a Markdown body), IDs scoped
+`W1frag`, with `TECH-DEBT.md` at the repo root holding only the policy — the filing and
+claiming workflows and the declared scope. `docs/TECH-DEBT-REGISTER.md` in
+`Poetic-Poems/poetic` specifies the format and the scope-code registry.
 
 Route it to the right repo: if the deferred work is in the `poetic` framework (anything
-under the synced `src/tools/`, `src/templates/`, `scripts/`, `editors/`, or `docs/`), log
-it in the **framework** repo's `TECH-DEBT.md` instead — not here. This repo's `TECH-DEBT.md`
-is for consumer-specific debt (poems, `.shared.poem`, `public/custom.css`, `.poetic-config`,
-CI, deployment). If you add an entry and refer to it elsewhere (e.g., in code comments), note
-that cross-reference in the entry itself, so whoever resolves it knows to also remove those
+under the synced `src/tools/`, `src/templates/`, `scripts/`, `editors/`, or `docs/`), file
+it in the **framework** repo's register instead — not here. This repo's register is for
+consumer-specific debt (poems, `.shared.poem`, `public/custom.css`, `.poetic-config`, CI,
+deployment). If you add an entry and refer to it elsewhere (e.g., in code comments), note
+that cross-reference in the entry's body, so whoever resolves it knows to also remove those
 references.
 
-`TECH-DEBT.md` ends with a permanent Ledger table recording every ID ever allocated, so a
-removed entry's ID is never reused. Get a new entry's ID from `scripts/next-tech-debt-id.pl`
-rather than counting by hand; add the entry's body under the `## Current Items` heading as a
-`### <id> <title>` section, and add a Ledger row (`open`) alongside it. When picking up an
-existing open item, follow the "Claiming an item" workflow at the top of `TECH-DEBT.md`.
+The register is an append-only set — item files are never deleted or renamed once on
+`main`, so an ID is never reused (CI enforces this). Get a new entry's ID from
+`scripts/next-tech-debt-id.pl --ref origin/main` (after a fetch) rather than counting by
+hand, and create `tech-debt/<id>.md` with `status: open`. When picking up an existing open
+item, follow the "Claiming an item" workflow in `TECH-DEBT.md`; resolving is a
+frontmatter-only edit — `status: resolved` plus `resolved:` and `ref:` — with the body left
+in place as the permanent record.
 
 ## Documentation principles
 
