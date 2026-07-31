@@ -1,92 +1,75 @@
+---
+scope: W1frag
+---
+
 # Tech debt
 
-Deferred work and known gaps specific to this repository (Fragments & Unity).
-Record an entry here whenever you defer something, rather than leaving it only in
-a commit message or in chat. Keep entries short and dated. Live items live under
-the "Current Items" heading as `### <id> <title>` sections. Once an issue has
-been resolved, remove its `### <id> <title>` section from Current Items below —
-but never remove its row from the Ledger table at the bottom of this file; see
-"Ledger" below.
+Deferred work and known gaps specific to this repository (Fragments &
+Unity), kept as a per-item register: every record ever allocated lives as
+one file under `tech-debt/`, named by its ID
+(`TD-W1frag-<YYMMDD><NN>.md`), with YAML frontmatter carrying the record's
+state and a Markdown body describing it. The full format, ID grammar and
+scope-code registry are specified in
+[docs/TECH-DEBT-REGISTER.md in Poetic-Poems/poetic](https://github.com/Poetic-Poems/poetic/blob/main/docs/TECH-DEBT-REGISTER.md).
 
-Framework-level tech debt — anything under the synced `src/tools/`,
-`src/templates/`, `scripts/`, `editors/`, or `docs/` — belongs in the `poetic`
-framework repo's `TECH-DEBT.md`, not here.
+Route each item to the right repo: if the deferred work is in the `poetic`
+framework (anything under the synced `src/tools/`, `src/templates/`,
+`scripts/`, `editors/`, or `docs/`), file it in the **framework** repo's
+register instead — not here. This register is for consumer-specific debt
+(poems, `.shared.poem`, `public/custom.css`, `.poetic-config`, CI,
+deployment).
 
-Format:
-```
-### <id> <short title>
+`perl scripts/td-check.pl` (also `npm run check:td-register`) validates
+the register and runs on every pull request via
+`.github/workflows/tech-debt-register.yml`, alongside two guards: no file
+in `tech-debt/` may ever be deleted or renamed once on `main` (the
+append-only Ledger guarantee — IDs are never reused), and no old-format
+`### TD` item sections may reappear in this file.
 
-A description of what, why it matters, where, and a suggested fix.
+## Filing an item
 
-```
-Where `<id>` is a literal "TD" then the date followed by a zero-padded
-sequential number (starting at 1 for the first entry of a day). I.e.:
-**TD*YYMMDDNN***. `NN` is one more than the highest `NN` already used for
-that date **in the Ledger table**, not just what's currently visible above
-it — a resolved entry's body is removed, but its Ledger row stays forever,
-so the Ledger (not memory or scrollback) is the source of truth for the next
-free ID. Compute it with `scripts/next-tech-debt-id.pl --ref origin/main`
-(after a `git fetch origin`) rather than counting by hand — the `--ref` makes
-the allocation reflect the shared state instead of a possibly stale checkout.
-It still cannot see IDs allocated on unmerged branches, so also skim open
-pull requests and `td/*` branches when filing.
-
-IDs are only unique within this repository: sister repositories allocate from
-the same date-based sequence, so the bare ID may exist in several of them.
-When referring to an item anywhere outside this repository (a sister repo's
-docs, a cross-repo PR, chat), qualify it with the repo name — e.g.
-`fragments-and-unity TD26072001`.
+1. Allocate the ID with `scripts/next-tech-debt-id.pl --ref origin/main`
+   (after a `git fetch origin`). It cannot see IDs allocated on unmerged
+   branches, so also skim open pull requests and `td/*` branches. If two
+   filings do collide, git surfaces it as an add/add conflict on the
+   filename; the later one renames to the next free NN before merging.
+2. Create `tech-debt/<id>.md` with frontmatter `id`, `title`,
+   `status: open`, `filed` (today, matching the ID's date), an optional
+   `review:` provenance line, and a body describing what, why it matters,
+   where, and a suggested fix.
+3. If the item is referenced elsewhere (code comments, docs), note those
+   references in the body so whoever resolves it removes them too.
 
 ## Claiming an item
 
-This repository is worked by concurrent agents: autonomous and interactive
-sessions may pick up items at the same time, so a claim must be checked and
-taken against the shared state, never against what a local checkout happens
-to say. Before starting work on an open item:
+Before starting work on an open item, check and take the claim against the
+shared state, never against what a local checkout happens to say:
 
-1. `git fetch origin`, then confirm the item's Ledger row is `open` (not
+1. `git fetch origin`, then confirm the item's `status:` is `open` (not
    `in-progress`) **as of `origin/main`** — e.g. via
    `perl scripts/get-tech-debt-record.pl --ref origin/main <id>`.
 2. Confirm nobody holds a claim: `git ls-remote origin "refs/heads/td/<id>"`
-   must print nothing, and skim open pull requests for the ID (which also
-   catches claims made on unconventionally named branches).
+   must print nothing, and skim open pull requests for the ID.
 3. Create the claim branch, named exactly **`td/<id>`**, from `origin/main`;
-   flip the item's Ledger row Status to `in-progress`; commit and push. The
-   branch name is the claim lock: git refuses the push if the branch already
-   exists, so a rejected push means another agent won the race — abandon
-   quietly; never force-push over it.
-4. Open a **draft** pull request right away — before the fix is finished — so
-   `gh pr list` shows the claim too. The Ledger status flip can be its first
-   commit.
-5. Do the work, pushing further commits to the same branch/PR.
-6. Once verified, flip the Ledger row to `resolved` (fill in `Resolved` and
-   `Ref`), remove the entry's `### <id>` section from Current Items, and mark
-   the PR ready for review.
+   flip the item's `status:` to `in-progress`; commit and push. The branch
+   name is the claim lock: a rejected push means someone else claimed
+   first — abandon quietly; never force-push over it.
+4. Open a **draft** pull request right away, then do the work on the same
+   branch.
+5. Once verified, flip the item's frontmatter to `status: resolved` and
+   fill `resolved:` (today's date) and `ref:` (the PR number), leaving the
+   body in place, and mark the PR ready for review.
 
-If a claim is abandoned, close the draft PR and delete the `td/<id>` branch —
-that releases the lock. The in-progress flip only ever lived on the branch,
-so `main`'s Ledger still says `open` and nothing needs reverting.
+If a claim is abandoned, close the draft PR and delete the `td/<id>`
+branch — the record on `main` still says `open`.
 
-## Current Items
+## Resolution and history
 
-The open and in-progress items, each as a `### <id> <title>` section. This
-heading is permanent: when there are no current items it stays here (empty), so
-it is always obvious where a new item's body belongs.
+A resolved item's file is its permanent record: the body stays, and
+`git log --follow tech-debt/<id>.md` is the item's audit trail. Never
+delete or rename an item file, and never flip a resolved item back —
+re-opening debt means filing a new item that references the old one. An
+item that turns out not to be debt keeps its file too: `status: not-debt`,
+with `ref:` pointing at where the content moved.
 
-<!-- Add new items directly below, as `### <id> <title>` sections. -->
-
-## Ledger
-
-Every tech-debt ID ever allocated — open, in-progress, resolved, or not-debt —
-is listed here forever, in ID order. This is what makes numbering unambiguous:
-the next free ID for a given date is one more than the highest `NN` seen
-below for that date, regardless of whether the corresponding entry still has
-a body above.
-
-A row can also close as `not-debt`: the item was filed here but turned out, on
-reflection, not to be a deferred cost at all. Its `### <id>` section is removed
-like a resolved one, but nothing was fixed, so the `Resolved` column stays
-blank; the `Ref` column instead points to wherever the content moved.
-
-| ID | Title | Status | Resolved | Ref |
-|----|-------|--------|----------|-----|
+Aggregated views of the register are generated on demand, never committed.
