@@ -7,6 +7,8 @@
 const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
+const { REPO_ROOT } = require('./repo-root');
+const { PoemParser } = require('./poem-parser');
 
 /**
  * Every entity convertEntitiesToMarkup understands, keyed by its exact
@@ -59,26 +61,78 @@ const ENTITY_PATTERN = new RegExp(
 );
 
 /**
+ * Placeholder for a segment's naturally unpaired '"' while it passes through
+ * tag/escape processing untouched -- see
+ * YamlToPoemConverter#convertSegmentHtmlToPlainText(). Contains no character
+ * any of that processing treats specially (no `\`, `_`, `*`, `~`, backtick,
+ * `[`, `'`, `/`, `{`, `}`, `&`, `-`), so it is never itself escaped or
+ * matched as markup.
+ */
+const UNPAIRED_QUOTE_SENTINEL = '\x00UNPAIREDQUOTE\x00';
+
+/**
  * Convert YAML data structure to .poem format
+ *
+ * @param {object} data - the parsed YAML poem data
+ * @param {{defaultAuthor?: string}} [options] - `defaultAuthor` is what the
+ *   applicable `.shared.poem` resolves `${author}` to, i.e. the value
+ *   writeHeader() treats as implied rather than explicit -- see writeHeader()
+ *   below.
  */
 class YamlToPoemConverter {
-  constructor(data) {
+  constructor(data, { defaultAuthor } = {}) {
     this.data = data;
     this.lines = [];
+    this.defaultAuthor = defaultAuthor;
   }
 
   /**
    * Main conversion method
    */
   convert() {
+    const hasAudio = this.hasAudioContent();
+    const hasPostscript = this.hasPostscriptContent();
+    const hasAnalysis = this.hasAnalysisContent();
+    const hasMetadata = this.hasMetadataContent();
+
     this.writeHeader();
-    this.writeVersions();
-    this.writeAudio();
-    this.writePostscript();
-    this.writeAnalysis();
+    this.writeVersions(hasAudio || hasPostscript || hasAnalysis || hasMetadata);
+    this.writeAudio(hasPostscript || hasAnalysis || hasMetadata);
+    this.writePostscript(hasAnalysis || hasMetadata);
+    this.writeAnalysis(hasMetadata);
     this.writeMetadata();
 
-    return this.lines.join('\n');
+    // A .poem file conventionally ends with a single trailing newline (see
+    // .editorconfig's insert_final_newline), which the section writers above
+    // no longer supply as a side effect now that a trailing blank line is
+    // only ever written ahead of content that actually follows.
+    return this.lines.join('\n') + '\n';
+  }
+
+  /**
+   * Whether the Audio/Postscript/Analysis/Metadata section has content to
+   * write, matching each writeX() method's own content guard below. convert()
+   * uses these to work out, for each earlier section, whether *any* later
+   * section has content -- POEM-SYNTAX.md: a section's `====` end marker "is
+   * only required if there is subsequent non-empty content" -- so an empty
+   * section between two sections that do have content still gets its own
+   * bare marker line, while a poem with nothing after Versions gets none of
+   * the three at all.
+   */
+  hasAudioContent() {
+    return !!this.data.audio;
+  }
+
+  hasPostscriptContent() {
+    return !!(this.data.postscript && this.data.postscript.length > 0);
+  }
+
+  hasAnalysisContent() {
+    return !!this.data.analysis;
+  }
+
+  hasMetadataContent() {
+    return !!(this.data.directives || this.data.labels);
   }
 
   /**
@@ -103,8 +157,15 @@ class YamlToPoemConverter {
   writeHeader() {
     this.addLine(this.data.title);
 
-    // Only add author line if it's not the default
-    if (this.data.author && this.data.author !== 'A Poet') {
+    // Omit the author line only when it matches this.defaultAuthor -- what a
+    // poem with no author line of its own resolves `${author}` to via the
+    // applicable `.shared.poem` (see PoemParser#parseHeader's own default).
+    // A repo-specific literal here (e.g. this repo's own "A Poet") would be
+    // wrong for a consumer whose `.shared.poem` defines a different default
+    // (TD-PPpoet-26080201 cause 3); `undefined` (no applicable `.shared.poem`,
+    // or it defines no `${author}`) never matches a real author, so the line
+    // is always written in that case.
+    if (this.data.author && this.data.author !== this.defaultAuthor) {
       this.addLine(this.data.author);
     }
 
@@ -133,8 +194,12 @@ class YamlToPoemConverter {
 
   /**
    * Write versions section
+   *
+   * @param {boolean} needsEndMarker - whether Audio, Postscript, Analysis, or
+   *   Metadata has content following, so the section's `====` end marker
+   *   must be written (see hasAudioContent() etc. above).
    */
-  writeVersions() {
+  writeVersions(needsEndMarker) {
     if (!this.data.versions || this.data.versions.length === 0) {
       throw new Error('No versions found in YAML data');
     }
@@ -188,10 +253,12 @@ class YamlToPoemConverter {
       }
     }
 
-    // End of versions marker
-    this.addBlankLines();
-    this.addLine('====');
-    this.addBlankLines();
+    // End of versions marker -- Versions always has content (checked above),
+    // so a needed marker is always preceded by a separating blank line.
+    if (needsEndMarker) {
+      this.addBlankLines();
+      this.addLine('====');
+    }
   }
 
   /**
@@ -230,9 +297,16 @@ class YamlToPoemConverter {
 
   /**
    * Write audio section
+   *
+   * @param {boolean} needsEndMarker - whether Postscript, Analysis, or
+   *   Metadata has content following (see writeVersions() above).
    */
-  writeAudio() {
-    if (this.data.audio) {
+  writeAudio(needsEndMarker) {
+    const hasAudio = this.hasAudioContent();
+
+    if (hasAudio) {
+      this.addBlankLines();
+
       // Service names are data-driven (see song-handlers.js /
       // song-handlers.yaml) -- write back whatever the YAML has, in order,
       // rather than a fixed Audiomack/Suno pair. A bare `true` value becomes
@@ -255,12 +329,17 @@ class YamlToPoemConverter {
           );
         }
       }
-      this.addBlankLines();
     }
 
-    // End of audio marker
-    this.addLine('====');
-    this.addBlankLines();
+    // End of audio marker -- only when something with content follows; an
+    // empty section still gets a bare marker line (no leading blank line) so
+    // it doesn't swallow the one separating the previous marker from it.
+    if (needsEndMarker) {
+      if (hasAudio) {
+        this.addBlankLines();
+      }
+      this.addLine('====');
+    }
   }
 
   /**
@@ -293,9 +372,16 @@ class YamlToPoemConverter {
 
   /**
    * Write postscript section
+   *
+   * @param {boolean} needsEndMarker - whether Analysis or Metadata has
+   *   content following (see writeVersions() above).
    */
-  writePostscript() {
-    if (this.data.postscript && this.data.postscript.length > 0) {
+  writePostscript(needsEndMarker) {
+    const hasPostscript = this.hasPostscriptContent();
+
+    if (hasPostscript) {
+      this.addBlankLines();
+
       for (let i = 0; i < this.data.postscript.length; i++) {
         const note = this.data.postscript[i];
 
@@ -329,20 +415,29 @@ class YamlToPoemConverter {
           this.addBlankLines();
         }
       }
-
-      this.addBlankLines();
     }
 
-    // End of postscript marker
-    this.addLine('====');
-    this.addBlankLines();
+    // End of postscript marker -- see writeAudio() above for the pattern.
+    if (needsEndMarker) {
+      if (hasPostscript) {
+        this.addBlankLines();
+      }
+      this.addLine('====');
+    }
   }
 
   /**
    * Write analysis section
+   *
+   * @param {boolean} needsEndMarker - whether Metadata has content following
+   *   (see writeVersions() above).
    */
-  writeAnalysis() {
-    if (this.data.analysis) {
+  writeAnalysis(needsEndMarker) {
+    const hasAnalysis = this.hasAnalysisContent();
+
+    if (hasAnalysis) {
+      this.addBlankLines();
+
       // Write synopsis if present
       if (this.data.analysis.synopsis) {
         this.addLine('{Synopsis}');
@@ -358,10 +453,14 @@ class YamlToPoemConverter {
         this.addBlankLines();
         const full = this.convertHtmlToPlainText(this.data.analysis.full);
         this.addLine(full);
+      }
+    }
+
+    // End of analysis marker -- see writeAudio() above for the pattern.
+    if (needsEndMarker) {
+      if (hasAnalysis) {
         this.addBlankLines();
       }
-
-      // End of file marker (optional, but include it)
       this.addLine('====');
     }
   }
@@ -377,9 +476,11 @@ class YamlToPoemConverter {
    * empty (or absent) Metadata section.
    */
   writeMetadata() {
-    if (!this.data.directives && !this.data.labels) {
+    if (!this.hasMetadataContent()) {
       return;
     }
+
+    this.addBlankLines();
 
     if (this.data.directives) {
       for (const directive of this.data.directives) {
@@ -437,9 +538,18 @@ class YamlToPoemConverter {
    * parameter list. `open`/`close` are '{{'/'}}' for a version label or
    * '{'/'}' for a segment/postscript label, matching the spacing each
    * already uses (`{{ Label }}` vs `{Label}`).
+   *
+   * `label` is stored as rendered HTML (poem-parser.js's parseVersion() etc.
+   * run it through the same convertMarkup() as segment.lines), so it must be
+   * un-rendered back to `.poem` markup syntax before writing it, exactly like
+   * every other HTML-bearing field -- TD-PPpoet-26080202: writing it raw let
+   * a `<span class="...">` or a smart-quote entity survive into the `.poem`
+   * output, where the next parse's convertMarkup() saw it as ordinary label
+   * text and mangled it further.
    */
   formatLabelLine(open, close, label, params) {
-    const inner = open === '{{' ? ` ${label} ` : label;
+    const plainLabel = this.convertSegmentHtmlToPlainText(label);
+    const inner = open === '{{' ? ` ${plainLabel} ` : plainLabel;
     const base = `${open}${inner}${close}`;
     return params ? base + this.formatParamList(params) : base;
   }
@@ -489,6 +599,7 @@ class YamlToPoemConverter {
     for (const block of blocks) {
       const trimmed = block.trim();
       const peeled = blocks.length === 1 ? this.peelTrailingBlockElement(trimmed) : null;
+      const paragraphs = this.splitParagraphRun(trimmed);
 
       // Handle headings (now they're single-line after normalization)
       if (trimmed.match(/^<h5[^>]*>/) && trimmed.endsWith('</h5>')) {
@@ -503,10 +614,20 @@ class YamlToPoemConverter {
       } else if (trimmed.match(/^<h2[^>]*>/) && trimmed.endsWith('</h2>')) {
         const text = this.stripHtmlTags(trimmed.replace(/^<h2[^>]*>/, '').replace(/<\/h2>$/, ''));
         result.push(`# ${text}`);
-      } else if (trimmed.startsWith('<p>') && trimmed.endsWith('</p>')) {
-        // Paragraph - convert HTML entities back to markup
-        const text = this.stripHtmlTags(trimmed.slice(3, -4));
-        result.push(this.convertEntitiesToMarkup(text));
+      } else if (paragraphs) {
+        // One or more paragraphs. markdown-it joins sibling block elements
+        // with a single '\n', never a blank line (see peelTrailingBlockElement's
+        // doc comment above), so a field with more than one paragraph is still
+        // exactly one `block` here even though its source had blank lines
+        // between them. Slicing only the outermost `<p>`/`</p>` (as this branch
+        // used to) left inner paragraphs' own `</p>`/`<p>` tags as literal text,
+        // which grew an extra `<p>...</p>` wrapper on every subsequent round
+        // trip (TD-PPpoet-26080201 cause 1). Splitting every paragraph out and
+        // pushing each separately reproduces the blank-line separation via
+        // `result.join('\n\n')` below.
+        for (const paragraph of paragraphs) {
+          result.push(this.convertEntitiesToMarkup(this.stripHtmlTags(paragraph)));
+        }
       } else if (trimmed === '') {
         // Skip empty blocks
         continue;
@@ -564,6 +685,46 @@ class YamlToPoemConverter {
     }
 
     return result.join('\n\n');
+  }
+
+  /**
+   * Split `trimmed` into its paragraphs' inner HTML if it consists ENTIRELY
+   * of one or more `<p>...</p>` elements, each optionally followed by a
+   * single '\n' before the next -- the shape markdown-it renders sibling
+   * paragraphs into (see convertHtmlToPlainText()'s multi-paragraph branch
+   * above) -- or null if it doesn't (a heading, a list, plain text, or a
+   * malformed/partial run). Scans with one non-nested lazy `<p>...</p>` match
+   * per iteration, checking each starts exactly where the previous one (plus
+   * its separating '\n', if any) ended, rather than a single
+   * `/^(?:<p>[\s\S]*?<\/p>\n?)+$/` test: that pattern's outer `+` wrapping an
+   * inner variable-length `[\s\S]*?` is the classic catastrophic-backtracking
+   * shape (CodeQL js/polynomial-redos flagged it on a run of many `</p><p>`
+   * repetitions with no closing `</p>` at the end).
+   *
+   * @param {string} trimmed
+   * @returns {string[]|null}
+   */
+  splitParagraphRun(trimmed) {
+    if (!trimmed.startsWith('<p>') || !trimmed.endsWith('</p>')) {
+      return null;
+    }
+
+    const paragraphs = [];
+    const pattern = /<p>([\s\S]*?)<\/p>/g;
+    let expectedIndex = 0;
+    let match;
+    while ((match = pattern.exec(trimmed)) !== null) {
+      if (match.index !== expectedIndex) {
+        return null;
+      }
+      paragraphs.push(match[1]);
+      expectedIndex = pattern.lastIndex;
+      if (trimmed[expectedIndex] === '\n') {
+        expectedIndex++;
+      }
+    }
+
+    return expectedIndex === trimmed.length ? paragraphs : null;
   }
 
   /**
@@ -729,8 +890,18 @@ class YamlToPoemConverter {
       return '';
     }
 
+    // Swap the run's naturally unpaired '"' (if any -- see
+    // findUnpairedQuoteIndex()) for a sentinel before any tag/escape
+    // processing sees it, so it flows through untouched and comes out the
+    // other side still a bare '"' rather than being escaped to `\"`
+    // (TD-PPpoet-26080201 cause 2).
+    const unpairedQuoteIndex = this.findUnpairedQuoteIndex(html);
+    const marked = unpairedQuoteIndex === -1
+      ? html
+      : html.slice(0, unpairedQuoteIndex) + UNPAIRED_QUOTE_SENTINEL + html.slice(unpairedQuoteIndex + 1);
+
     const outputLines = [];
-    for (const line of html.split('\n')) {
+    for (const line of marked.split('\n')) {
       const quoteMatch = line.match(/^<blockquote>([\s\S]*)<\/blockquote>$/);
       if (quoteMatch) {
         for (const quoteLine of quoteMatch[1].split('<br/>')) {
@@ -744,7 +915,35 @@ class YamlToPoemConverter {
       outputLines.push(this.stripSegmentHtmlTags(text) + (hasBreak ? '  ' : ''));
     }
 
-    return outputLines.join('\n');
+    return outputLines.join('\n').split(UNPAIRED_QUOTE_SENTINEL).join('"');
+  }
+
+  /**
+   * Index of `html`'s naturally unpaired '"', or -1 if it has none.
+   * poem-parser.js's processWysiwygLines() runs convertMarkup() (poem-markup.js)
+   * once over a segment's whole multi-line non-quote run, pairing bare '"'
+   * characters left-to-right and turning each pair into a smart-quote entity
+   * -- so a genuinely unpaired '"' is always the single leftover of an odd
+   * total, distinguishable from a deliberately `\"`-escaped pair (whose two
+   * members also decode to bare '"' each, but must round-trip back to `\"`,
+   * or they would re-pair into a smart quote on the next parse) only by that
+   * parity. `href="..."`/`class="..."` (the only tag attributes carrying '"'
+   * in this HTML dialect) are excluded since they are never content.
+   *
+   * @param {string} html
+   * @returns {number}
+   */
+  findUnpairedQuoteIndex(html) {
+    const contentOnly = html.replace(/(?:href|class)="[^"]*"/g, (m) => ' '.repeat(m.length));
+    let lastIndex = -1;
+    let count = 0;
+    for (let i = 0; i < contentOnly.length; i++) {
+      if (contentOnly[i] === '"') {
+        count++;
+        lastIndex = i;
+      }
+    }
+    return count % 2 === 1 ? lastIndex : -1;
   }
 
   /**
@@ -757,16 +956,19 @@ class YamlToPoemConverter {
    * and `\` itself) is always fully consumed into a tag or entity when it
    * forms real markup -- none of them survive as bare text in the rendered
    * HTML: an unescaped `&` or `'` is unconditionally turned into `&#38;`/
-   * `&#39;`, and an unescaped `"` either pairs into smart-quote entities or
-   * (if unpaired) is left alone either way, so escaping it back is always
-   * safe. So any of these characters still present in decoded text can only be
-   * literal (originally `\`-escaped) content, and escaping them again --
-   * unconditionally, before restoring any tags -- is always correct; it is
-   * what makes an escaped `\*literal\*` round-trip back to itself instead of
-   * becoming `<em>literal</em>` on the next parse (TD26072401). This walks
-   * the text with a single tokenising pass, rather than escaping first and
-   * matching tags second, because escaping first would also mangle the "/"
-   * inside an `<a href="https://...">`'s own markup before it can be matched.
+   * `&#39;`. `"` is the one exception -- a genuinely unpaired one is left bare
+   * rather than escaped (TD-PPpoet-26080201 cause 2: escaping it too added a
+   * backslash the source never had), via the sentinel swap in the caller,
+   * convertSegmentHtmlToPlainText(), before this method or escapeSegmentLiteral()
+   * ever sees it. So every OTHER one of these characters still present in
+   * decoded text can only be literal (originally `\`-escaped) content, and
+   * escaping it again -- unconditionally, before restoring any tags -- is
+   * always correct; it is what makes an escaped `\*literal\*` round-trip back
+   * to itself instead of becoming `<em>literal</em>` on the next parse
+   * (TD26072401). This walks the text with a single tokenising pass, rather
+   * than escaping first and matching tags second, because escaping first
+   * would also mangle the "/" inside an `<a href="https://...">`'s own markup
+   * before it can be matched.
    *
    * @param {string} text
    * @returns {string}
@@ -835,14 +1037,95 @@ class YamlToPoemConverter {
 }
 
 /**
- * Convert a YAML file to .poem format
+ * Resolve the applicable `.shared.poem`'s `${author}` value -- the sentinel
+ * YamlToPoemConverter#writeHeader() compares against to decide whether an
+ * author line is implied rather than explicit (TD-PPpoet-26080201 cause 3).
+ * Reuses PoemParser's own variable-definition parsing (rather than
+ * duplicating its syntax here) up to, but not including, the header/version
+ * parsing that a bare `.shared.poem` -- variable definitions only, no
+ * title/date -- can't satisfy.
+ *
+ * @param {string} [sharedPoemPath] - absent, or naming a file that doesn't
+ *   exist, means there is no applicable `.shared.poem` (e.g. no poem
+ *   directory context, or a fixture that deliberately opts out -- see
+ *   test/yaml-to-poem.test.js's `regenerate()`).
+ * @returns {string|undefined} the resolved `${author}`, or undefined if
+ *   there's no applicable `.shared.poem` or it defines no `${author}`.
  */
-function convertYamlToPoem(yamlFilePath) {
+function resolveDefaultAuthor(sharedPoemPath) {
+  if (!sharedPoemPath || !fs.existsSync(sharedPoemPath)) {
+    return undefined;
+  }
+
+  const parser = new PoemParser(fs.readFileSync(sharedPoemPath, 'utf8'));
+  parser.removeCommentBlocks();
+  parser.joinContinuedLines();
+  parser.processVariables();
+  return parser.variables.get('author');
+}
+
+/**
+ * Convert a YAML file to .poem format
+ *
+ * @param {string} yamlFilePath
+ * @param {{sharedPoemPath?: string}} [options] - `sharedPoemPath` names the
+ *   `.shared.poem` whose `${author}` becomes the default-author sentinel
+ *   (see resolveDefaultAuthor()); omitted means there is none, so every
+ *   author is always written explicitly.
+ */
+function convertYamlToPoem(yamlFilePath, options = {}) {
   const content = fs.readFileSync(yamlFilePath, 'utf8');
   const data = yaml.load(content);
 
-  const converter = new YamlToPoemConverter(data);
+  const converter = new YamlToPoemConverter(data, {
+    defaultAuthor: resolveDefaultAuthor(options.sharedPoemPath),
+  });
   return converter.convert();
+}
+
+/**
+ * Convert every non-partial .yaml file in `yamlDir` to a .poem file in
+ * `poemDir`, mirroring poem-to-yaml.js's convertAllPoemsToYaml() and
+ * poem-to-raw.js's convertAllPoemsToRaw(): a partial/private file (leading
+ * '_' or '.', e.g. `_example.yaml`/`_shared.yaml`) is skipped, and a
+ * per-file conversion failure is logged and skipped rather than aborting
+ * the run.
+ *
+ * @param {object} [options]
+ * @param {string} [options.yamlDir] - Override the default `src/poems/yaml`
+ *   directory (tests only; the `--all` CLI entry point below always uses the
+ *   default — this tool is not part of `npm run build`).
+ * @param {string} [options.poemDir] - Override the default `src/poems/poem`
+ *   directory (tests only).
+ * @returns {number} the number of files converted
+ */
+function convertAllYamlToPoem({
+  yamlDir = path.join(REPO_ROOT, 'src', 'poems', 'yaml'),
+  poemDir = path.join(REPO_ROOT, 'src', 'poems', 'poem'),
+} = {}) {
+  const files = fs.readdirSync(yamlDir);
+  const sharedPoemPath = path.join(poemDir, '.shared.poem');
+
+  let converted = 0;
+  for (const file of files) {
+    if (file.endsWith('.yaml') && !file.startsWith('_') && !file.startsWith('.')) {
+      const yamlPath = path.join(yamlDir, file);
+      const poemPath = path.join(poemDir, file.replace('.yaml', '.poem'));
+
+      try {
+        console.log(`Converting ${file}...`);
+        const poemContent = convertYamlToPoem(yamlPath, { sharedPoemPath });
+        fs.writeFileSync(poemPath, poemContent, 'utf8');
+        console.log(`  → ${path.basename(poemPath)}`);
+        converted++;
+      } catch (error) {
+        console.error(`Error converting ${file}:`, error.message);
+      }
+    }
+  }
+
+  console.log(`\nConverted ${converted} YAML files to .poem format`);
+  return converted;
 }
 
 /**
@@ -858,38 +1141,16 @@ function main() {
   }
 
   if (args[0] === '--all') {
-    // Convert all .yaml files in poems/ directory (except special files)
-    const poemsDir = path.join(process.cwd(), 'src', 'poems');
-    const files = fs.readdirSync(poemsDir);
-
-    const skipFiles = ['_shared.yaml', '_example.yaml'];
-    let converted = 0;
-
-    for (const file of files) {
-      if (file.endsWith('.yaml') && !skipFiles.includes(file)) {
-        const yamlPath = path.join(poemsDir, file);
-        const poemPath = path.join(poemsDir, file.replace('.yaml', '.poem'));
-
-        try {
-          console.log(`Converting ${file}...`);
-          const poemContent = convertYamlToPoem(yamlPath);
-          fs.writeFileSync(poemPath, poemContent, 'utf8');
-          console.log(`  → ${path.basename(poemPath)}`);
-          converted++;
-        } catch (error) {
-          console.error(`Error converting ${file}:`, error.message);
-        }
-      }
-    }
-
-    console.log(`\nConverted ${converted} YAML files to .poem format`);
+    convertAllYamlToPoem();
   } else {
     // Convert single file
     const inputFile = args[0];
     const outputFile = args[1] || inputFile.replace('.yaml', '.poem');
 
     try {
-      const poemContent = convertYamlToPoem(inputFile);
+      const poemContent = convertYamlToPoem(inputFile, {
+        sharedPoemPath: path.join(path.dirname(outputFile), '.shared.poem'),
+      });
       fs.writeFileSync(outputFile, poemContent, 'utf8');
       console.log(`Converted ${inputFile} → ${outputFile}`);
     } catch (error) {
@@ -903,5 +1164,5 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { YamlToPoemConverter, convertYamlToPoem };
+module.exports = { YamlToPoemConverter, convertYamlToPoem, convertAllYamlToPoem, resolveDefaultAuthor };
 
