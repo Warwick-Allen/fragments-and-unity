@@ -39,12 +39,18 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { URL, URLSearchParams } = require('url');
 const { readPoeticConfig } = require('./poetic-config');
+const { escapeHtml } = require('./html-escape');
 
 const BLOGGER_SCOPE = 'https://www.googleapis.com/auth/blogger';
 const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const BLOGGER_API = 'https://www.googleapis.com/blogger/v3';
 const CREDENTIALS_FILE = path.join(process.cwd(), '.blogger-credentials.json');
+
+// Matches sync-blogger.js's FETCH_TIMEOUT_MS for the same Google OAuth token
+// and Blogger API endpoints. No retry here — this is a one-shot interactive
+// flow, so the timeout alone is enough to bound a hang.
+const FETCH_TIMEOUT_MS = 30_000;
 
 // Write `contents` to `filePath` with mode 0600, tolerating a pre-existing
 // read-only file at that path. `fs.writeFileSync`'s `mode` option only takes
@@ -175,6 +181,7 @@ async function exchangeCodeForTokens({ clientId, clientSecret, code, redirectUri
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
 
   if (!response.ok) {
@@ -191,6 +198,7 @@ async function lookupBlogId(blogUrl, accessToken) {
   url.searchParams.set('url', blogUrl);
   const response = await fetch(url.toString(), {
     headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!response.ok) {
     const text = await response.text().catch(() => '');
@@ -216,6 +224,7 @@ async function lookupBlogId(blogUrl, accessToken) {
 async function listMyBlogs(accessToken) {
   const response = await fetch(`${BLOGGER_API}/users/self/blogs`, {
     headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (response.status === 403) {
     return { recognised: false, blogs: [] };
@@ -343,8 +352,18 @@ function waitForCode(port, expectedState) {
         const returnedState = requestUrl.searchParams.get('state');
 
         if (error) {
+          // CSRF guard: reject a callback whose state does not match the value
+          // we generated for this request, same as the code branch below.
+          if (expectedState && returnedState !== expectedState) {
+            res.writeHead(400, { 'Content-Type': 'text/html' });
+            res.end('<html><body><h1>Authorization failed</h1><p>State mismatch — possible CSRF. You may close this window.</p></body></html>');
+            server.close();
+            reject(new Error('State parameter mismatch — aborting (possible CSRF).'));
+            return;
+          }
+
           res.writeHead(400, { 'Content-Type': 'text/html' });
-          res.end(`<html><body><h1>Authorization failed</h1><p>${error}</p><p>You may close this window.</p></body></html>`);
+          res.end(`<html><body><h1>Authorization failed</h1><p>${escapeHtml(error)}</p><p>You may close this window.</p></body></html>`);
           server.close();
           reject(new Error(`OAuth error: ${error}`));
           return;
@@ -384,6 +403,26 @@ function waitForCode(port, expectedState) {
       // Server is ready
     });
   });
+}
+
+// ── Consent URL construction ──────────────────────────────────────────────────
+
+function buildConsentUrl(clientId, redirectUri, state, codeChallenge) {
+  const consentUrl = new URL(AUTH_URL);
+  consentUrl.searchParams.set('client_id', clientId);
+  consentUrl.searchParams.set('redirect_uri', redirectUri);
+  consentUrl.searchParams.set('response_type', 'code');
+  consentUrl.searchParams.set('scope', BLOGGER_SCOPE);
+  consentUrl.searchParams.set('access_type', 'offline');
+  // select_account forces the account chooser even when the browser has exactly
+  // one Google account signed in. Without it Google silently uses that account,
+  // which is how people authorise as the wrong one — a mistake that surfaces
+  // much later as an unexplained 403 from the sync.
+  consentUrl.searchParams.set('prompt', 'select_account consent');
+  consentUrl.searchParams.set('state', state);
+  consentUrl.searchParams.set('code_challenge', codeChallenge);
+  consentUrl.searchParams.set('code_challenge_method', 'S256');
+  return consentUrl;
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -450,20 +489,7 @@ After running:
   const { verifier: codeVerifier, challenge: codeChallenge } = generatePkce();
 
   // Build consent URL
-  const consentUrl = new URL(AUTH_URL);
-  consentUrl.searchParams.set('client_id', clientId);
-  consentUrl.searchParams.set('redirect_uri', redirectUri);
-  consentUrl.searchParams.set('response_type', 'code');
-  consentUrl.searchParams.set('scope', BLOGGER_SCOPE);
-  consentUrl.searchParams.set('access_type', 'offline');
-  // select_account forces the account chooser even when the browser has exactly
-  // one Google account signed in. Without it Google silently uses that account,
-  // which is how people authorise as the wrong one — a mistake that surfaces
-  // much later as an unexplained 403 from the sync.
-  consentUrl.searchParams.set('prompt', 'select_account consent');
-  consentUrl.searchParams.set('state', state);
-  consentUrl.searchParams.set('code_challenge', codeChallenge);
-  consentUrl.searchParams.set('code_challenge_method', 'S256');
+  const consentUrl = buildConsentUrl(clientId, redirectUri, state, codeChallenge);
 
   console.log('\n─────────────────────────────────────────────────────────');
   console.log('Step 1: Open the following URL in your browser and sign in:');
@@ -599,4 +625,6 @@ module.exports = {
   generatePkce,
   saveFileMode0600,
   promptHidden,
+  escapeHtml,
+  buildConsentUrl,
 };

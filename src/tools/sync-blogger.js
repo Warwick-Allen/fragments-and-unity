@@ -33,6 +33,8 @@
  *                                                     - create/update/skip decision for one poem
  *   processRemovals({ posts, currentSlugs, label, removedMode, blogId, token, dryRun })
  *                                                     - the removal-pass loop (draft/delete/keep)
+ *   main(options)                                     - CLI entry point; accepts injectable
+ *                                                       dependencies (tests only, see its doc comment)
  */
 
 'use strict';
@@ -41,7 +43,9 @@ const fs = require('fs');
 const path = require('path');
 const { readPoeticConfig } = require('./poetic-config');
 const { readPoemFile, loadPoemData, renderFragment, listPoemYamlFiles } = require('./poem-render');
+const { toISODate } = require('./date-utils');
 const { REPO_ROOT } = require('./repo-root');
+const { isHelpRequested } = require('./cli-help');
 
 const YAML_DIR = path.join(REPO_ROOT, 'src', 'poems', 'yaml');
 const BLOGGER_API = 'https://www.googleapis.com/blogger/v3';
@@ -881,15 +885,44 @@ async function processRemovals({ posts, currentSlugs, label, removedMode, blogId
 
 /**
  * Main entry point: sync poems to Blogger.
+ *
+ * @param {object} [options]
+ * @param {string[]} [options.argv] - Override process.argv.slice(2) (tests only;
+ *   the npm run sync:blogger / CLI entry point below always uses the default).
+ * @param {string} [options.yamlDir] - Override YAML_DIR (tests only).
+ * @param {object} [options.config] - Override the config normally read via
+ *   readPoeticConfig(REPO_ROOT) (tests only).
+ * @param {object} [options.env] - Override process.env (tests only).
+ * @param {string|null} [options.credentialsPath] - Passed through to resolveConfig();
+ *   omit to use its own default (tests only).
  */
-async function main() {
+async function main({
+  argv = process.argv.slice(2),
+  yamlDir = YAML_DIR,
+  config = null,
+  env = process.env,
+  credentialsPath,
+} = {}) {
+  if (isHelpRequested(argv)) {
+    console.log('Usage: node src/tools/sync-blogger.js [--dry-run] [--only <slug>]');
+    console.log('');
+    console.log('Sync poems to Blogger (create/update posts, handle removed poems),');
+    console.log('per the blogger.* settings in .poetic-config.yaml.');
+    console.log('');
+    console.log('Options:');
+    console.log('  --dry-run       Report what would change without calling the Blogger API');
+    console.log('  --only <slug>   Sync a single poem by slug (skips the removal pass)');
+    console.log('  --help, -h      Show this help');
+    return;
+  }
+
   // Declared out here so the catch can hand them to the diagnosis.
   let opts = null;
   let token = null;
   try {
-    const args = parseArgs(process.argv.slice(2));
-    const rawConfig = readPoeticConfig(REPO_ROOT);
-    opts = resolveConfig(rawConfig, process.env);
+    const args = parseArgs(argv);
+    const rawConfig = config || readPoeticConfig(REPO_ROOT);
+    opts = resolveConfig(rawConfig, env, credentialsPath);
 
     if (!opts.enabled) {
       console.log('Blogger sync disabled (set blogger: { sync: true } in .poetic-config.yaml).');
@@ -921,28 +954,37 @@ async function main() {
     let updated = 0;
     let unchanged = 0;
     let handled = 0; // drafted or deleted
+    let skipped = 0; // un-normalisable date
 
     const currentSlugs = new Set();
 
     // Read all poem YAML files (see poem-render.js's listPoemYamlFiles for the filter rules)
-    const yamlFiles = listPoemYamlFiles(YAML_DIR).map(f => path.join(YAML_DIR, f));
+    const yamlFiles = listPoemYamlFiles(yamlDir).map(f => path.join(yamlDir, f));
 
     for (const yamlPath of yamlFiles) {
-      // Read raw file for ISO date (before loadPoemData mutates it)
+      // Read raw file for ISO date (loadPoemData() re-parses the file separately
+      // and overwrites its own copy's `date` with a display-formatted string).
       const raw = readPoemFile(yamlPath);
       if (!raw) continue;
-
-      let isoDate;
-      if (raw.date instanceof Date) {
-        isoDate = raw.date.toISOString().slice(0, 10);
-      } else {
-        isoDate = String(raw.date || '');
-      }
 
       const data = loadPoemData(yamlPath);
       if (!data) continue;
 
       if (args.only && data.slug !== args.only) continue;
+
+      const isoDate = toISODate(raw.date);
+      if (isoDate === null) {
+        const shownValue = raw.date ? JSON.stringify(String(raw.date)) : '(missing)';
+        console.warn(
+          `Blogger sync: skipping "${yamlPath}" — un-normalisable date ${shownValue}; poem not synced.`
+        );
+        skipped++;
+        // Keep the slug in currentSlugs even though the poem is skipped, so the
+        // removal pass does not mistake "un-synced" for "removed" and draft or
+        // delete the poem's existing live post.
+        currentSlugs.add(data.slug);
+        continue;
+      }
 
       const bodyHtml = extractContent(
         renderFragment(data, { config: rawConfig }),
@@ -994,8 +1036,12 @@ async function main() {
     const dryRunSuffix = args.dryRun ? ' (dry-run)' : '';
     const removedLabel = opts.removed === 'delete' ? 'deleted' : 'drafted';
     console.log(
-      `Blogger sync: ${created} created, ${updated} updated, ${unchanged} unchanged, ${handled} ${removedLabel}${dryRunSuffix}.`
+      `Blogger sync: ${created} created, ${updated} updated, ${unchanged} unchanged, ${handled} ${removedLabel}, ${skipped} skipped${dryRunSuffix}.`
     );
+    if (skipped > 0) {
+      // An unattended run must not exit 0 having silently left a poem un-synced.
+      process.exitCode = 1;
+    }
   } catch (err) {
     console.error(`Blogger sync error: ${err.message}`);
     const advice = await diagnoseBloggerFailure(err, {
@@ -1037,4 +1083,5 @@ module.exports = {
   deletePost,
   syncPoem,
   processRemovals,
+  main,
 };
