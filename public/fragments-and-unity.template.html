@@ -586,7 +586,7 @@ h3.post-title, .comments h4 {
 }
 
 .no-content {
-  color: #999;
+  color: #707070;
   font-style: italic;
 }
 
@@ -628,7 +628,7 @@ h1 {
 }
 
 .poem-info {
-  color: gray;
+  color: #707070;
   font-size: 90%;
   padding-bottom: 3ex;
 }
@@ -675,6 +675,8 @@ h1 {
 h1.poem-title,
 h2.poem-title {
   border-bottom: 2px solid #f0f0f0;
+  font-size: 1.5em;
+  font-weight: bold;
   margin: 1ex 0 2ex;
   padding-bottom: 0.5ex;
 }
@@ -755,7 +757,7 @@ h2.poem-title {
 }
 
 .audio-indicator {
-  color: #007AFF;
+  color: #0062CC;
   font-size: 1.2em;
 }
 
@@ -767,7 +769,7 @@ h2.poem-title {
 .links a {
   border: 1px solid #007AFF;
   border-radius: 5px;
-  color: #007AFF;
+  color: #0062CC;
   display: inline-block;
   margin: 0 15px;
   padding: 10px 20px;
@@ -775,7 +777,7 @@ h2.poem-title {
 }
 
 .links a:hover {
-  background: #007AFF;
+  background: #0062CC;
   color: white;
 }
 
@@ -902,14 +904,14 @@ h2.poem-title {
   background: white;
   border: 1px solid #007AFF;
   border-radius: 999px;
-  color: #007AFF;
+  color: #0062CC;
   cursor: pointer;
   font: inherit;
   padding: 3px 14px 4px;
 }
 
 .filter-reset:hover {
-  background: #007AFF;
+  background: #0062CC;
   color: white;
 }
 
@@ -920,7 +922,7 @@ h2.poem-title {
 }
 
 .filter-empty {
-  color: #999;
+  color: #666;
   font-style: italic;
   padding: 20px 0;
   text-align: center;
@@ -1008,7 +1010,7 @@ h2.poem-title {
 }
 
 .toc-table a {
-  color: #007AFF;
+  color: #0062CC;
   text-decoration: none;
 }
 
@@ -1022,12 +1024,12 @@ h2.poem-title {
 }
 
 .audio-cell:empty::after {
-  color: #ccc;
+  color: #707070;
   content: "—";
 }
 
 .back-link {
-  color: #007AFF;
+  color: #0062CC;
   display: inline-block;
   margin-bottom: 20px;
   text-decoration: none;
@@ -1039,7 +1041,7 @@ h2.poem-title {
 
 .back-to-top {
   align-items: center;
-  background: #007AFF;
+  background: #0062CC;
   border: none;
   border-radius: 50%;
   bottom: 30px;
@@ -1071,15 +1073,19 @@ h2.poem-title {
   display: flex;
 }
 
+/* Keep this text fully opaque. Fading it composites the colour towards the
+   page background, which costs more contrast than the value below can afford:
+   at 70% opacity even a much darker grey lands under the 4.5:1 WCAG AA
+   minimum, and the dark-mode palette below fails the same way. De-emphasise
+   it with the colour and the smaller size instead. */
 .song-segment {
-  color: gray;
+  color: #707070;
   display: block;
   height: 1ex;
   font-family: monospace;
   font-size: 70%;
   font-style: italic;
   letter-spacing: 5%;
-  opacity: 70%;
   overflow: visible;
   position: relative;
   text-transform: lowercase;
@@ -1091,7 +1097,7 @@ h2.poem-title {
 }
 
 .song-link {
-  color: gray;
+  color: #707070;
   font-style: italic;
   padding-top: 4ex;
 }
@@ -1103,7 +1109,7 @@ h2.poem-title {
   border-right-style:   none;
   border-top-style:     solid;
   border-width:         1px;
-  color:                gray;
+  color:                #707070;
   font-size:            80%;
   margin:               4ex 0;
   padding:              2ex 0;
@@ -1116,41 +1122,56 @@ h2.poem-title {
   font-weight: bold;
 }
 
-/* Postscript "See more" preview toggle (pure-CSS checkbox hack; poetic.js
-   layers on top to suppress the control when truncation would hide <= 1 line). */
+/* Postscript "See more" preview toggle (a real <button aria-expanded>, wired
+   via addEventListener in poetic.js). The clamp is off by default, so a
+   postscript renders in full with no script; poetic.js measures rendered
+   content against --preview-lines and adds .postscript-clamped when
+   truncation would hide more than one line, applying the clamp rather than
+   lifting it. The toggle stays hidden unless the clamp is applied (the
+   adjacent-sibling selector below), so nothing is offered when there is
+   nothing to reveal. */
 
-.postscript-content {
+.postscript-content.postscript-clamped {
   max-height: calc(var(--preview-lines, 5) * 1lh);
   overflow: hidden;
   -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent);
   mask-image: linear-gradient(to bottom, #000 60%, transparent);
 }
 
-.postscript-toggle-cb:checked ~ .postscript-content,
-.postscript-content.postscript-no-preview {
+.postscript-content.postscript-clamped.postscript-expanded {
   max-height: none;
   -webkit-mask-image: none;
   mask-image: none;
 }
 
 .postscript-toggle {
+  background: none;
+  border: none;
   color: inherit;
   cursor: pointer;
-  display: inline-block;
+  display: none;
+  font: inherit;
   font-weight: bold;
   margin-top: 0.5ex;
+  padding: 0;
   text-decoration: underline;
+}
+
+.postscript-content.postscript-clamped + .postscript-toggle {
+  display: inline-block;
 }
 
 .postscript-toggle::after {
   content: "See more \2B9F";
 }
 
-.postscript-toggle-cb:checked ~ .postscript-toggle::after {
+.postscript-toggle[aria-expanded="true"]::after {
   content: "See less \2B9D";
 }
 
-/* Analysis */
+/* Analysis. Show/hide and synopsis/full state (aria-expanded, aria-pressed,
+   data-selected/data-analysis-panel) is toggled by the delegated click handler in
+   poetic.js; these attribute selectors are what actually change visibility. */
 
 .analysis {
   background-color: #ffeedd;
@@ -1167,6 +1188,10 @@ button.analysis {
   font-size: 90%;
   font-weight: bold;
   padding: 1ex 1em;
+}
+
+button.analysis.show[aria-expanded="true"] {
+  display: none;
 }
 
 button.analysis.hide {
@@ -1188,13 +1213,26 @@ button.analysis.selector {
   margin: 1ex auto;
 }
 
-button.selected {
+button.analysis.selector[aria-pressed="true"] {
   background-color: #fff8ee;
 }
 
 div.analysis {
   display: none;
   padding: 2ex 2em;
+}
+
+button.analysis.show[aria-expanded="true"] ~ div.analysis {
+  display: block;
+}
+
+.analysis-panel {
+  display: none;
+}
+
+.full-or-synopsis-selector[data-selected="synopsis"] ~ .analysis-panel[data-analysis-panel="synopsis"],
+.full-or-synopsis-selector[data-selected="full"] ~ .analysis-panel[data-analysis-panel="full"] {
+  display: block;
 }
 
 .analysis h2 {
@@ -1293,7 +1331,7 @@ div.song-item-link::after  { content: ")"; }
 /* Footer (public/poetic-footer.html injected by the build; see docs/BUILD.md) */
 .poetic-footer {
   border-top: 1px solid #eee;
-  color: #999;
+  color: #666;
   font-size: 0.85em;
   margin-top: 40px;
   padding-top: 20px;
@@ -1377,6 +1415,7 @@ html.dark-mode a {
   color: #7fb3ff;
 }
 
+html.dark-mode .no-content,
 html.dark-mode .poem-info,
 html.dark-mode .song-segment,
 html.dark-mode .song-link,
@@ -1390,13 +1429,19 @@ html.dark-mode .analysis {
   color: #e6eef6;
 }
 
+html.dark-mode .analysis h2,
+html.dark-mode .analysis h3,
+html.dark-mode .analysis h4 {
+  color: #e6eef6;
+}
+
 html.dark-mode button.analysis {
   background-color: #122026;
   color: #e6eef6;
 }
 
 html.dark-mode button.analysis.hide,
-html.dark-mode button.selected {
+html.dark-mode button.analysis.selector[aria-pressed="true"] {
   background-color: #0c1416;
 }
 
@@ -1547,6 +1592,7 @@ html.dark-mode .poetic-footer {
 
   a { color: var(--accent); }
 
+  .no-content,
   .poem-info,
   .song-segment,
   .song-link,
@@ -1560,13 +1606,19 @@ html.dark-mode .poetic-footer {
     color: var(--text);
   }
 
+  .analysis h2,
+  .analysis h3,
+  .analysis h4 {
+    color: var(--text);
+  }
+
   button.analysis {
     background-color: #122026;
     color: var(--text);
   }
 
   button.analysis.hide,
-  button.selected {
+  button.analysis.selector[aria-pressed="true"] {
     background-color: #0c1416;
   }
 
@@ -3101,16 +3153,60 @@ document.addEventListener('click', function (e) {
   player.classList.remove('hidden'); player.appendChild(iframe);
 });
 
-// Postscript "See more" preview — the CSS checkbox hack handles expand/collapse
-// without JS; this just suppresses the toggle when truncation would hide <= 1 line,
-// which depends on rendered layout and so can only be decided at runtime.
+// Postscript "See more" preview — a real <button aria-expanded> (see
+// _poem-content.pug) toggles expand/collapse; CSS keys off aria-expanded via an
+// attribute selector, mirroring how the sort headers in all-poems.js keep
+// aria-sort in sync with their visual state.
+document.addEventListener('click', function (e) {
+  const toggle = e.target.closest('.postscript-toggle');
+  if (!toggle) return;
+  const content = document.getElementById(toggle.getAttribute('aria-controls'));
+  if (!content) return;
+  const expanded = toggle.getAttribute('aria-expanded') === 'true';
+  toggle.setAttribute('aria-expanded', String(!expanded));
+  content.classList.toggle('postscript-expanded', !expanded);
+  const label = toggle.querySelector('.sr-only');
+  if (label) label.textContent = expanded ? 'See more' : 'See less';
+});
+
+// Analysis show/hide + synopsis/full selector — delegated click handler mirroring
+// the postscript-toggle pattern above: aria-expanded/aria-pressed/data-* attributes
+// carry the state, and poetic.css keys visibility off them via attribute selectors,
+// so this stays the only script involved (see _poem-content.pug's "do not add a
+// script block here" comment).
+document.addEventListener('click', function (e) {
+  const show = e.target.closest('.analysis.show');
+  if (show) {
+    show.setAttribute('aria-expanded', 'true');
+    return;
+  }
+  const hide = e.target.closest('.analysis.hide');
+  if (hide) {
+    const showBtn = document.getElementById(hide.dataset.analysisToggle);
+    if (showBtn) showBtn.setAttribute('aria-expanded', 'false');
+    return;
+  }
+  const select = e.target.closest('.analysis.selector');
+  if (!select) return;
+  const group = select.closest('.full-or-synopsis-selector');
+  if (!group) return;
+  group.setAttribute('data-selected', select.dataset.analysisSelect);
+  group.querySelectorAll('.analysis.selector').forEach(function (btn) {
+    btn.setAttribute('aria-pressed', String(btn === select));
+  });
+});
+
+// Decides whether to apply the preview clamp — poetic.css leaves
+// .postscript-content unclamped by default so a postscript degrades to fully
+// expanded with no script, and this adds .postscript-clamped (which both
+// applies the clamp and, via poetic.css's adjacent-sibling selector, reveals
+// the toggle) once rendered layout is known.
 function evaluatePostscriptPreview(el) {
   const previewLines = parseFloat(el.dataset.previewLines) || 5;
   const style = getComputedStyle(el);
   let lineHeightPx = parseFloat(style.lineHeight);
   if (isNaN(lineHeightPx)) lineHeightPx = 1.2 * parseFloat(style.fontSize);
   const budgetPx = previewLines * lineHeightPx;
-  const toggle = el.parentElement && el.parentElement.querySelector('.postscript-toggle');
 
   // Measure the true bottom of rendered content, excluding the trailing margin of
   // the last child. scrollHeight includes that margin, which would count empty
@@ -3122,14 +3218,9 @@ function evaluatePostscriptPreview(el) {
     : el.scrollHeight;
   const hiddenPx = contentPx - budgetPx;
 
-  // Only offer the toggle when it would reveal at least a full line of real text.
-  if (hiddenPx <= lineHeightPx) {
-    el.classList.add('postscript-no-preview');
-    if (toggle) toggle.classList.add('hidden');
-  } else {
-    el.classList.remove('postscript-no-preview');
-    if (toggle) toggle.classList.remove('hidden');
-  }
+  // Only clamp — and so offer the toggle — when it would reveal at least a full
+  // line of real text.
+  el.classList.toggle('postscript-clamped', hiddenPx > lineHeightPx);
 }
 
 function evaluateAllPostscriptPreviews() {
