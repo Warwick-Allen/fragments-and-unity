@@ -18,11 +18,18 @@ const pug = require('pug');
 const { slugFromFile } = require('./slugify');
 const { formatDateForDisplay } = require('./date-utils');
 const { REPO_ROOT } = require('./repo-root');
-const { CONTEXT_VAR_NAMES, substituteContextVars, resolveContextVars, songsFor } = require('./render-core');
+const {
+  CONTEXT_VAR_NAMES, substituteContextVars, resolveContextVars, songsFor,
+  slugify, postscriptPreviewSettings, processAnalysisText,
+} = require('./render-core');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', 'templates');
 const FRAGMENT_TEMPLATE = path.join(TEMPLATES_DIR, 'poem.pug');
 const PAGE_TEMPLATE = path.join(TEMPLATES_DIR, 'poem-page.pug');
+// Included by both FRAGMENT_TEMPLATE and PAGE_TEMPLATE and holds essentially
+// all poem markup, so it must be a framework-wide staleness input everywhere
+// they are (see globalInputs/extraInputs in build-poems.js/build-all-poems.js).
+const PARTIAL_TEMPLATE = path.join(TEMPLATES_DIR, '_poem-content.pug');
 
 const POEMS_DIR = path.join(REPO_ROOT, 'src', 'poems', 'yaml');
 
@@ -327,7 +334,9 @@ function renderFragment(poemData, opts = {}) {
   const data = resolveContextVars(poemData);
   const songs = songsFor(data, config);
   const compiledFn = pug.compileFile(FRAGMENT_TEMPLATE, { pretty: false, cache: false });
-  return compiledFn({ ...data, songs, labelBase: '', standalone });
+  return compiledFn({
+    ...data, songs, labelBase: '', standalone, slugify, postscriptPreviewSettings, processAnalysisText,
+  });
 }
 
 /**
@@ -347,12 +356,14 @@ function renderPage(poemData, opts = {}) {
   const data = resolveContextVars(poemData);
   const songs = songsFor(data, config);
   const compiledFn = pug.compileFile(PAGE_TEMPLATE, { pretty: false, cache: false });
-  return compiledFn({ ...data, favicon, subtitle, songs, labelBase: '../' });
+  return compiledFn({
+    ...data, favicon, subtitle, songs, labelBase: '../', slugify, postscriptPreviewSettings, processAnalysisText,
+  });
 }
 
 module.exports = {
   resolveRefs, readPoemFile, clearRefCache, loadPoemData, renderFragment, renderPage,
   substituteContextVars, resolveContextVars, CONTEXT_VAR_NAMES, listPoemYamlFiles,
   collectRefFiles, refFilesForPoem, readYamlCached,
-  FRAGMENT_TEMPLATE, PAGE_TEMPLATE,
+  FRAGMENT_TEMPLATE, PAGE_TEMPLATE, PARTIAL_TEMPLATE,
 };

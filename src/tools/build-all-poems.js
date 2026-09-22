@@ -12,18 +12,17 @@
 const fs = require('fs');
 const path = require('path');
 const { slugFromFile } = require('./slugify');
-const { parseDateForSorting, formatDateForDisplay, toISODate } = require('./date-utils');
+const { parseDateForSorting } = require('./date-utils');
 const { readPoeticConfig, CONFIG_FILENAME } = require('./poetic-config');
-const { loadPoemData, renderFragment, listPoemYamlFiles, refFilesForPoem, readYamlCached, FRAGMENT_TEMPLATE } = require('./poem-render');
-const { hasResolvableSongs } = require('./song-handlers');
-const { renderTitleMarkup, BEAUTIFY_OPTIONS } = require('./render-core');
+const { loadPoemData, renderFragment, listPoemYamlFiles, refFilesForPoem, readYamlCached, FRAGMENT_TEMPLATE, PARTIAL_TEMPLATE } = require('./poem-render');
+const { BEAUTIFY_OPTIONS } = require('./render-core');
 const { renderFooter, upsertFooter, resolveFooterSourcePath } = require('./footer');
 const { REPO_ROOT } = require('./repo-root');
 const {
   needsRebuild, needsRebuildAggregate, recordManifest, forceRebuildRequested, manifestSourcesUnchanged,
 } = require('./needs-rebuild');
 const {
-  escapeAmpersand, buildPoemDataIsland, renderFreshIndexHtml, renderAllPoemsHtml,
+  escapeAmpersand, summarizePoem, buildPoemDataIsland, renderFreshIndexHtml, renderAllPoemsHtml,
 } = require('./aggregate-render-core');
 const beautify = require('js-beautify');
 const { isHelpRequested } = require('./cli-help');
@@ -32,6 +31,12 @@ const { isHelpRequested } = require('./cli-help');
 // the human-authored form even though song-handlers.js now loads the generated
 // data module) — editing them must rebuild the aggregate pages.
 const BUILTIN_HANDLERS_PATH = path.join(REPO_ROOT, 'src', 'song-handlers.yaml');
+
+// Defaults for main()'s options — overridable by tests only; the npm run
+// build / CLI entry point below always uses these, mirroring POEMS_DIR/
+// PUBLIC_DIR in build-poems.js.
+const POEMS_DIR = path.join(REPO_ROOT, 'src', 'poems', 'yaml');
+const PUBLIC_DIR = path.join(REPO_ROOT, 'public');
 
 // public/all-poems.js calls date-utils.js's parseDateForSorting() to sort the
 // table's date column, so date-utils.js must also be reachable as a plain
@@ -94,12 +99,7 @@ function concatenateAllHtmlFiles(
           return;
         }
 
-        const titleHtml = renderTitleMarkup(title);
-        const date = data.date ? formatDateForDisplay(data.date) : 'Unknown Date';
-        const isoDate = data.date ? toISODate(data.date) : '';
-        const hasAudio = hasResolvableSongs(data.audio, config);
-
-        poemData.push({ slug, title, titleHtml, date, isoDate, yamlPath, hasAudio });
+        poemData.push({ ...summarizePoem({ data, slug }, config), yamlPath });
       } catch (err) {
         console.warn(`Warning: Could not read ${file}:`, err.message);
       }
@@ -280,19 +280,18 @@ function generateIndexHtml(
         }
 
         // Clean URL: point to slug/ directory instead of slug.html
-        const file = `${slug}/`;
-        const titleHtml = renderTitleMarkup(title);
-        const hasAudio = hasResolvableSongs(data.audio, config);
-        const date = toISODate(data.date);
-        const labels = Array.isArray(data.labels) ? data.labels : [];
+        const summary = summarizePoem({ data, slug }, config);
 
         poemData.push({
-          file: file,
-          title: title,
-          titleHtml: titleHtml,
-          hasAudio: hasAudio,
-          date: date,
-          labels: labels,
+          file: `${slug}/`,
+          title: summary.title,
+          titleHtml: summary.titleHtml,
+          hasAudio: summary.hasAudio,
+          // summarizePoem() normalises a missing/unparsable ISO date to '',
+          // but this JSON island must keep this field's original null (see
+          // toISODate in date-utils.js) so the emitted payload is unchanged.
+          date: summary.isoDate || null,
+          labels: summary.labels,
         });
       } catch (err) {
         console.warn(`Warning: Could not read ${yamlFile}:`, err.message);
@@ -453,8 +452,52 @@ function determineAggregateBuildPlan({
   return { skip, sources };
 }
 
+/**
+ * Decide the favicon to use and the informational notices to print for a
+ * build, from the resolved .poetic-config.yaml.
+ *
+ * Pure, so the wording stays testable without a real config file or a build.
+ *
+ * @param {object} config - parsed .poetic-config.yaml (readPoeticConfig() result)
+ * @returns {{ favicon: string, notices: string[] }}
+ */
+function describeConfigNotices(config) {
+  // Strip a leading "public/" so the href resolves correctly when public/ is
+  // served as the web root (both locally and once GitHub Pages deploys its
+  // contents to the site root) — see build-poems.js for the same rule.
+  const rawFavicon = config.favicon || 'poetic-logo.svg';
+  const favicon = rawFavicon.replace(/^public\//, '');
+
+  const notices = [];
+  if (config.favicon) {
+    notices.push(`Using favicon from .poetic-config.yaml: ${favicon}`);
+  }
+  if (config.subtitle) {
+    notices.push(`Using subtitle from .poetic-config.yaml: ${config.subtitle}`);
+  }
+  if (config.title) {
+    notices.push(`Using title from .poetic-config.yaml: ${config.title}`);
+  }
+  if (config.footer && config.footer.enabled === false) {
+    notices.push('Footer disabled via .poetic-config.yaml (footer.enabled: false)');
+  } else if (config.footer && config.footer.source) {
+    notices.push(`Using footer.source from .poetic-config.yaml: ${config.footer.source}`);
+  }
+
+  return { favicon, notices };
+}
+
 // Main execution
-function main() {
+/**
+ * Build public/all-poems.html (every poem concatenated) and refresh
+ * public/index.html from src/poems/yaml/ sources.
+ *
+ * @param {object} [options]
+ * @param {string} [options.poemsDir] - Override POEMS_DIR (tests only; the
+ *   npm run build / CLI entry point below always uses the default).
+ * @param {string} [options.publicDir] - Override PUBLIC_DIR (tests only).
+ */
+function main({ poemsDir = POEMS_DIR, publicDir = PUBLIC_DIR } = {}) {
   if (isHelpRequested(process.argv.slice(2))) {
     console.log('Usage: node src/tools/build-all-poems.js [--force]');
     console.log('');
@@ -466,8 +509,6 @@ function main() {
     console.log('  --help, -h   Show this help');
     return;
   }
-
-  const publicDir = path.join(REPO_ROOT, 'public');
 
   if (!fs.existsSync(publicDir)) {
     console.error(`Error: Public directory not found: ${publicDir}`);
@@ -483,31 +524,13 @@ function main() {
   }
 
   const config = readPoeticConfig(REPO_ROOT);
-  // Strip a leading "public/" so the href resolves correctly when public/ is
-  // served as the web root (both locally and once GitHub Pages deploys its
-  // contents to the site root) — see build-poems.js for the same rule.
-  const rawFavicon = config.favicon || 'poetic-logo.svg';
-  const favicon = rawFavicon.replace(/^public\//, '');
-  if (config.favicon) {
-    console.log(`Using favicon from .poetic-config.yaml: ${favicon}`);
-  }
+  const { favicon, notices } = describeConfigNotices(config);
+  notices.forEach((notice) => console.log(notice));
   const subtitle = config.subtitle;
-  if (subtitle) {
-    console.log(`Using subtitle from .poetic-config.yaml: ${subtitle}`);
-  }
-  if (config.title) {
-    console.log(`Using title from .poetic-config.yaml: ${config.title}`);
-  }
   // all-poems.html and index.html both live at the public/ root.
   const footerBlock = renderFooter(config, REPO_ROOT, { base: '' });
   const footerSourcePath = resolveFooterSourcePath(config, REPO_ROOT);
-  if (config.footer && config.footer.enabled === false) {
-    console.log('Footer disabled via .poetic-config.yaml (footer.enabled: false)');
-  } else if (config.footer && config.footer.source) {
-    console.log(`Using footer.source from .poetic-config.yaml: ${config.footer.source}`);
-  }
 
-  const poemsDir = path.join(REPO_ROOT, 'src', 'poems', 'yaml');
   const configPath = path.join(REPO_ROOT, CONFIG_FILENAME);
   const allPoemsOutputPath = path.join(publicDir, 'all-poems.html');
   const indexPath = path.join(publicDir, 'index.html');
@@ -527,6 +550,7 @@ function main() {
   const yamlCache = new Map();
   const extraInputs = [
     FRAGMENT_TEMPLATE,
+    PARTIAL_TEMPLATE,
     BUILTIN_HANDLERS_PATH,
     ...(fs.existsSync(configPath) ? [configPath] : []),
     ...(fs.existsSync(footerSourcePath) ? [footerSourcePath] : []),
@@ -542,7 +566,7 @@ function main() {
   console.log('Step 1: Building all-poems.html...');
 
   const { html: allPoemsHtml, errorCount: poemErrorCount } =
-    concatenateAllHtmlFiles(publicDir, favicon, config, { yamlCache });
+    concatenateAllHtmlFiles(publicDir, favicon, config, { yamlCache, poemsDir });
   const concatenatedContent = upsertFooter(allPoemsHtml, footerBlock);
 
   const prettifiedContent = beautify.html(concatenatedContent, BEAUTIFY_OPTIONS);
@@ -555,7 +579,7 @@ function main() {
 
   console.log('\nStep 2: Updating index.html...');
 
-  const updatedIndexContent = generateIndexHtml(publicDir, favicon, subtitle, config, { yamlCache });
+  const updatedIndexContent = generateIndexHtml(publicDir, favicon, subtitle, config, { yamlCache, poemsDir });
   let indexErrorCount = 0;
   if (updatedIndexContent) {
     const finalIndexContent = upsertFooter(updatedIndexContent, footerBlock);
@@ -595,4 +619,6 @@ module.exports = {
   findBalancedBlock,
   selfHealLandmarks,
   determineAggregateBuildPlan,
+  describeConfigNotices,
+  main,
 };
